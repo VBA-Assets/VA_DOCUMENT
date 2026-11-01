@@ -332,6 +332,7 @@ class Para:
     first_indent: float = 0.0  # 行頭の空白から変換した、書き出しのインデント（字）
     left_indent: int = None    # ->N の左インデント（字）。None なら自動（見出しの段に合わせる）
     table: object = None       # 表のとき Table
+    follows: object = None     # 表の左端をそろえる直前の段落（箇条書き・段落番号・->N。Para）。なければ None
     # 元の行（parse に渡した行の番号）と、本文の1字目がその行の何字目か（確認表示とエディターの連動に使う）。
     # 表は src_line〜src_end の行
     src_line: int = -1
@@ -370,10 +371,12 @@ class Table:
     highlight: dict = field(default_factory=dict)   # 同じく、蛍光ペンの字の位置の集合
     dots: dict = field(default_factory=dict)        # 同じく、傍点の字の位置の集合
     distribute: dict = field(default_factory=dict)  # 同じく、均等割付の範囲 ((始め, 終わり, 字数), ...)
+    widths: list = field(default_factory=list)      # 列ごとの幅の字数（区切りの行の {字数}。指定のない列は None）
 
 
-# 表の区切りの行（|---|:===:| など）
-_TABLE_SEP_CELL_RE = re.compile(r"^\s*(:?)([-=])\2*(:?)\s*$")
+# 表の区切りの行（|---|:===:| など。列の後ろの {8} は、列の幅の字数。2026-11-01 班長決定）
+_TABLE_SEP_CELL_RE = re.compile(r"^\s*(:?)([-=])\2*(:?)(?:\{([1-9１-９][0-9０-９]?)\})?\s*$")
+SEP_COLUMN_RE = re.compile(r"(:?[-=]+:?)(?:\{[^{}]*\})?")     # 区切りの行の1列分。group(1) が線と配置の : の部分
 _LEFT = "left"
 CELL_ALIGNS = {":-- ": _LEFT, ":-: ": CENTER, "--: ": RIGHT}     # セルの先頭の配置の記号（行頭の記号と同じ形）
 # セルの先頭の配置の記号（太字・蛍光ペンの記号の内側にあってもよい）。group(1) が前の囲む記号、group(2) が配置の記号
@@ -425,11 +428,27 @@ def parse_separator(line):
         m = _TABLE_SEP_CELL_RE.match(c)
         if not m:
             return None
-        left, kind, right = m.groups()
+        left, kind, right, _ = m.groups()
         kinds.add(kind)
         aligns.append(CENTER if left and right else RIGHT if right else _LEFT)
     # 1つの列でも = を使っていれば2重線にする（AI が一部の列だけ = にした場合も、利用者の意図を活かす）
     return aligns, "=" in kinds
+
+
+def separator_widths(line):
+    """表の区切りの行の、列ごとの幅の字数のリスト（指定のない列は None）。"""
+    found = [_TABLE_SEP_CELL_RE.match(c).group(4) for c in split_cells(line)]
+    return [int(c) if c else None for c in found]
+
+
+def with_column_widths(line, chars):
+    """表の区切りの行の {字数} を、chars（列ごとの字数。足りない列・None は指定なし）に書き換えた行を返す。"""
+    rest = iter(chars)
+
+    def put(m):
+        n = next(rest, None)
+        return m.group(1) + (f"{{{n}}}" if n else "")
+    return SEP_COLUMN_RE.sub(put, line)
 
 
 def _cell(text, default_align):
@@ -459,10 +478,12 @@ def parse_table(lines):
     head = split_cells(lines[0])
     n = max(len(head), len(aligns))
     aligns = aligns + [_LEFT] * (n - len(aligns))
+    widths = separator_widths(lines[1])
     def row(cells):
         cells = cells + [""] * (n - len(cells))
         return [_cell(c, aligns[k]) for k, c in enumerate(cells[:n])]
-    table = Table(row(head), [row(split_cells(l)) for l in lines[2:]], double)
+    table = Table(row(head), [row(split_cells(l)) for l in lines[2:]], double,
+                  widths=widths + [None] * (n - len(widths)))
     # セルの太字・蛍光ペンの記号を除き、字の位置を覚える
     for r, cells in enumerate([table.header] + table.rows):
         for c, (align, text) in enumerate(cells):
@@ -540,6 +561,15 @@ def split_leading_space(line):
     return line[i:], n
 
 
+def table_follows(paras):
+    """これから置く表の左端をそろえる直前の段落。箇条書き・段落番号・->N の段落なら、それを返す（空の行は飛ばす）。"""
+    for p in reversed(paras):
+        if p.kind == BLANK or p.area:
+            continue
+        return p if p.kind in (BULLET, NUMBER) or p.left_indent is not None else None
+    return None
+
+
 def parse(lines, dt):
     """マークダウンの行のリストを段落のリストにする。dt は文書の種類（DocType）。"""
     paras = []
@@ -564,7 +594,7 @@ def parse(lines, dt):
             table = parse_table(lines[i - 1:j])
             if table is not None:
                 paras.append(Para("", kind=TABLE, table=table, body_level=current if seen and not stopped else 0,
-                                  src_line=src, src_end=j - 1))
+                                  follows=table_follows(paras), src_line=src, src_end=j - 1))
                 i = j
                 continue
         kind, toc_levels = line_mark(line.strip())

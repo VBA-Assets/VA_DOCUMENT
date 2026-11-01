@@ -1,5 +1,6 @@
 """画面（仕様.md の4）。確認画面（モーダル）は差し替えて、画面の操作の流れを確かめる。"""
 import json
+import re
 import time
 from pathlib import Path
 
@@ -124,6 +125,145 @@ def test_editor_is_always_pseudonymized(window, monkeypatch):
     window.text.tag_add("sel", "1.3", "1.8")              # 「〔人名Ａ〕」
     window.on_register()
     assert "〔人名Ａ〕" not in window.raw_text() and window.raw_text().startswith("原告　甲野太郎")
+
+
+def _register_in_editor(window, monkeypatch, start, end, letters="b"):
+    window.text.tag_remove("sel", "1.0", "end")
+    window.text.tag_add("sel", start, end)
+    monkeypatch.setattr(ai_ops, "RegisterDialog", lambda parent, word, d: type("D", (), {"result": ("人名", letters)})())
+    window.on_register()
+
+
+def test_undo_register(window, tmp_path, monkeypatch):
+    """Ctrl+Z 1回で、仮名化の登録ごと戻る。Ctrl+Y でもう一度登録する。解除と同じく、語が残れば保存のときに知らせる
+    （2026-11-01 班長決定。それまでは登録が残り、組み直しでまた記号になって先へ戻れなかった）。"""
+    window._load_text(TEXT + "乙山花子と乙山花子。\n")
+    window.text.edit_separator()
+    window.text.insert("end-1c", "追記。")
+    window.text.edit_separator()
+    typed = window.raw_text()
+    _register_in_editor(window, monkeypatch, "5.0", "5.4")
+    registered = window.raw_text()
+    assert "〔人名Ｂ〕と〔人名Ｂ〕" in registered
+    window.on_undo()
+    assert window.raw_text() == typed
+    assert window.session.dictionary.find("乙山花子") is None
+    assert "〔人名Ｂ〕" not in window.tree.get_children()
+    assert "解除しました" in window.status.cget("text")
+    window.refresh()                            # 組み直しても、記号に戻らない
+    assert window.raw_text() == typed
+    assert window.session.released_in(window.real_text()) == {"乙山花子": 2}
+    window.on_redo()
+    assert window.raw_text() == registered
+    assert window.session.dictionary.find("乙山花子").token == "〔人名Ｂ〕"
+    assert window.session.dictionary.find("〔人名Ｂ〕").kind == "人名"
+    assert "〔人名Ｂ〕" in window.tree.get_children()
+    assert window.session.released_in(window.real_text()) == {}
+    window.on_undo()
+    window.on_undo()                            # 登録の前の直しまで戻れる
+    assert "追記。" not in window.raw_text()
+    window.refresh()
+    assert "乙山花子と乙山花子" in window.raw_text()
+
+
+def test_undo_unregister(window, monkeypatch):
+    """［解除］の後の Ctrl+Z で、記号と一覧の語が一緒に戻る（元の語の分からない記号を残さない。2026-11-01 班長決定）。
+    登録・解除の順に、続けて戻せる。"""
+    window._load_text(TEXT + "乙山花子と乙山花子。\n")
+    first = window.raw_text()
+    _register_in_editor(window, monkeypatch, "5.0", "5.4")
+    registered = window.raw_text()
+    window._unregister("〔人名Ｂ〕")
+    assert window.raw_text() == first
+    window.on_undo()
+    assert window.raw_text() == registered
+    assert window.session.dictionary.find("〔人名Ｂ〕").word == "乙山花子"
+    assert "〔人名Ｂ〕" in window.tree.get_children()
+    assert window.real_text().endswith("乙山花子と乙山花子。\n")      # 記号のまま PDF に出ない
+    assert window.session.released_in(window.real_text()) == {}
+    assert "仮名化しました" in window.status.cget("text")
+    window.on_redo()
+    assert window.raw_text() == first and window.session.dictionary.find("乙山花子") is None
+    assert window.session.released_in(window.real_text()) == {"乙山花子": 2}
+    window.refresh()
+    assert window.raw_text() == first
+    window.on_undo()
+    window.on_undo()                            # 解除の前へ、さらに登録の前へ
+    assert window.raw_text() == first and window.session.dictionary.find("乙山花子") is None
+    window.on_redo()
+    window.on_redo()
+    assert window.raw_text() == first and window.session.dictionary.find("乙山花子") is None
+    window.on_undo()
+    assert window.raw_text() == registered and window.session.dictionary.find("乙山花子") is not None
+
+
+def test_undo_after_edit_entry_keeps_dictionary(window, monkeypatch):
+    """［変更］の後の Ctrl+Z は、一覧を戻さない（覚えていた登録・解除を消す）。文章だけが戻る。"""
+    window._load_text(TEXT + "乙山花子と乙山花子。\n")
+    _register_in_editor(window, monkeypatch, "5.0", "5.4")
+    window.tree.selection_set("〔人名Ｂ〕")
+    monkeypatch.setattr(ai_ops, "EditDialog", lambda parent, e, d: type("D", (), {"result": ("乙山花子", "人名", "c")})())
+    window.on_edit_entry()
+    assert "〔人名Ｃ〕と〔人名Ｃ〕" in window.raw_text()
+    assert not window._undo_steps
+    window.on_undo()
+    window.on_undo()
+    assert window.session.dictionary.find("乙山花子").token == "〔人名Ｃ〕"
+
+
+def test_undo_two_registers_and_typing_after(window, monkeypatch):
+    """2語を登録し、後に打った字も含めて、新しい順に1回ずつ戻る。"""
+    window._load_text(TEXT + "乙山花子と丙川次郎。\n")
+    first = window.raw_text()
+    _register_in_editor(window, monkeypatch, "5.0", "5.4", "b")
+    second = window.raw_text()
+    pos = second.index("丙川次郎")
+    _register_in_editor(window, monkeypatch, f"1.0+{pos}c", f"1.0+{pos + 4}c", "c")
+    third = window.raw_text()
+    window.text.edit_separator()
+    window.text.insert("end-1c", "あ")
+    window.text.edit_separator()
+    window.on_undo()
+    assert window.raw_text() == third           # 打った字だけが戻り、登録は残る
+    assert len(window.session.dictionary.entries) == 3
+    window.on_undo()
+    assert window.raw_text() == second and window.session.dictionary.find("丙川次郎") is None
+    window.on_undo()
+    assert window.raw_text() == first and window.session.dictionary.find("乙山花子") is None
+    assert window.session.dictionary.find("甲野太郎") is not None
+    window.on_redo()
+    window.on_redo()
+    assert window.raw_text() == third and len(window.session.dictionary.entries) == 3
+
+
+def test_undo_typed_word_is_not_a_dead_end(window):
+    """仮名化した語を打って記号になった後の Ctrl+Z は、打つ前まで戻る（実名に戻しただけで止まると、次に組み直すときに
+    また記号になり、いつまでも先へ戻れない）。"""
+    start = window.raw_text()
+    window.text.edit_separator()
+    window.text.insert("end-1c", "甲野太郎")
+    window.text.edit_separator()
+    window.refresh()
+    assert window.raw_text() == start + "〔人名Ａ〕"
+    window.on_undo()
+    assert window.raw_text() == start
+    window.refresh()
+    assert window.raw_text() == start
+    window.on_redo()
+    assert window.raw_text() == start + "〔人名Ａ〕"
+
+
+def test_undo_keys_are_bound(window):
+    """<<Undo>>（Ctrl+Z）が on_undo を通る。戻す操作がなくても止まらない。"""
+    window.focus_force()
+    window.text.focus_force()
+    window.update()
+    window.text.event_generate("<<Undo>>")      # 読み込んだ直後は戻す操作がない
+    window.text.event_generate("<<Redo>>")
+    assert window.raw_text() == PSEUDO
+    window.text.insert("end-1c", "あ")
+    window.text.event_generate("<<Undo>>")
+    assert window.raw_text() == PSEUDO
 
 
 def test_align_and_line_marks(window):
@@ -2237,6 +2377,65 @@ def _in_table(window, cursor="4.3"):
     window.text.mark_set("insert", cursor)
 
 
+def test_table_column_widths_menu(window):
+    """［表］のメニュー：「列の幅を固定する」で今の字数を書き入れ、「列の幅を自動に戻す」で外す。どちらも Ctrl+Z 1回で
+    戻り、カーソルは動かない。すべての列を固定したら「固定する」は出さず、指定がなければ「自動に戻す」は出さない
+    （2026-11-01 班長決定）。"""
+    labels = lambda: [x[0] for x in window._table_menu_items((2, 5))]
+    window._load_text("前\n| 項目 | 金額 |\n|---|---:|\n| 休業損害 | 1,000 |\n| 慰謝料 | 500 |\n")
+    window.text.mark_set("insert", "4.3")
+    assert "列の幅を固定する" in labels() and "列の幅を自動に戻す" not in labels()
+    window.on_table_fix_widths()
+    line = window._line(3)
+    assert re.fullmatch(r"\|---\{\d+\}\|---:\{\d+\}\|", line)
+    assert window.text.index("insert") == "4.3"
+    assert "列の幅を固定する" not in labels() and "列の幅を自動に戻す" in labels()
+    assert "表の2行目" in window.status.cget("text")
+    window.refresh()
+    assert window.session.layout_map.table_piece(1) is not None
+    window.on_undo()
+    assert window._line(3) == "|---|---:|"
+    window.on_redo()
+    window.on_table_auto_widths()
+    assert window._line(3) == "|---|---:|"
+    window.on_undo()
+    assert window._line(3) == line
+    # 一部の列だけに字数があれば、どちらも出す。固定すると、書いてある列の字数は変わらない
+    window.text.mark_set("insert", "4.3")
+    window._set_column_widths(3, [8])
+    assert window._line(3) == "|---{8}|---:|"
+    assert "列の幅を固定する" in labels() and "列の幅を自動に戻す" in labels()
+    window.on_table_fix_widths()
+    assert window._line(3).startswith("|---{8}|---:{")
+    # 区切りの行に空白があっても、字数だけを書き換える
+    window.text.delete("3.0", "3.end")
+    window.text.insert("3.0", "| --- | :---: |")
+    window._set_column_widths(3, [6, 7])
+    assert window._line(3) == "| ---{6} | :---:{7} |"
+
+
+def test_table_widths_with_other_table_operations(window):
+    """{字数} のある表で、列の配置・2重線・列の追加が字数を壊さない。表として読め、保存する文書にも残る。"""
+    window._load_text("| 項目 | 金額 |\n|---{8}|---{10}|\n| 休業損害 | 1,000 |\n")
+    window.text.mark_set("insert", "2.10")
+    window.on_align("--: ")
+    assert window._line(2) == "|---{8}|---:{10}|"
+    window.on_align(":-: ")
+    assert window._line(2) == "|---{8}|:---:{10}|"
+    window.on_align(":-: ")
+    assert window._line(2) == "|---{8}|---{10}|"
+    window.on_table_double()
+    assert window._line(2) == "|==={8}|==={10}|"
+    window.on_table_double()
+    assert window._line(2) == "|---{8}|---{10}|"
+    window.text.mark_set("insert", "3.3")
+    window.on_table_column()
+    assert window._line(2) == "|---{8}|---|---{10}|"
+    window.refresh()
+    assert window.session.layout_map.table_piece(0) is not None
+    assert "|---{8}|---|---{10}|" in window.session.body(window.real_text())
+
+
 def test_table_menu_only_in_table(window, monkeypatch):
     """表の中の［表］は表を入れず、メニューを出す。2重線の項目の字は、今の線で変わる。"""
     posted = []
@@ -2245,7 +2444,7 @@ def test_table_menu_only_in_table(window, monkeypatch):
     before = window.raw_text()
     window.on_table()
     assert posted == [(2, 5)] and window.raw_text() == before
-    assert [x[0] for x in window._table_menu_items((2, 5))] == ["右に列を足す", "見出しの下を2重線にする"]
+    assert [x[0] for x in window._table_menu_items((2, 5))] == ["右に列を足す", "見出しの下を2重線にする", "列の幅を固定する"]
     window.on_table_double()
     assert window._line(3) == "|===|===:|"
     assert [x[0] for x in window._table_menu_items((2, 5))][1] == "見出しの下を1重線に戻す"

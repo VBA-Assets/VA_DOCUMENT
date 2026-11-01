@@ -460,6 +460,9 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
         self.text.bind("<FocusIn>", lambda e: self.after_idle(self._fit_ime), add="+")
         # 貼り付け（Ctrl+V）は、仮名化した語を記号に置き換えて貼る（エディターは常に仮名。2026-10-24）
         self.text.bind("<<Paste>>", self._on_paste)
+        # Ctrl+Z・Ctrl+Y は、仮名化の登録・解除も一緒に戻す（2026-11-01 班長決定）
+        self.text.bind("<<Undo>>", self.on_undo)
+        self.text.bind("<<Redo>>", self.on_redo)
         # エディターでカーソルを動かすと、その字のあるページを確認表示に出す（2026-10-23 班長指示）
         self._caret_job = None
         for seq in ("<KeyRelease>", "<ButtonRelease-1>"):
@@ -481,6 +484,7 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
         self.text.delete("1.0", "end")
         self.text.insert("1.0", self.session.dictionary.pseudonymize(text))
         self.text.edit_reset()
+        self._undo_steps, self._redo_steps = [], []     # Ctrl+Z で戻せる仮名化の登録・解除（ai_ops.on_undo）
         self.text.edit_modified(False)
         self._loading = False
         self._sync_settings_boxes()

@@ -285,6 +285,17 @@ def test_review_ignores_table_separator_colons():
     assert [m for m, _ in r.lost_marks] == [":-:"]
 
 
+def test_review_notices_lost_column_widths():
+    """AI が列の幅の {字数} を消したら知らせる。字数を変えたのは知らせない（直してよい。画像の幅と同じ）。"""
+    current = ["| 項目 | 金額 |", "|---{8}|---:{10}|", "| 休業損害 | 1,080,000 |"]
+    r = vamd.review(answer(["| 項目 | 金額 |", "|---{9}|---:{12}|", "| 休業損害 | 1,080,000 |"]), "K7Q29XMD", 3, current,
+                    make_dictionary())
+    assert not r.lost_marks
+    r = vamd.review(answer(["| 項目 | 金額 |", "|---|---:{10}|", "| 休業損害 | 1,080,000 |"]), "K7Q29XMD", 3, current,
+                    make_dictionary())
+    assert r.lost_marks == [("{字数}", current[1])]
+
+
 def test_review_reports_lost_indent_but_not_changed_count():
     """AI の回答で ->N が消えたら知らせる。字数を変えただけなら知らせない。"""
     current = ["# 認否", "->2 主張は争う。"]

@@ -1,12 +1,14 @@
 """行組みのうち、本文の行の格子に合わせない塊（表・画像）の組み方（layout.Typesetter に混ぜる BlockMixin）。
 
-表（仕様.md の5.3）：Word に合わせ込まず、Word の既定に寄せた読みやすい値で組む。表の左端は本文の左インデントにそろえる。
+表（仕様.md の5.3）：Word に合わせ込まず、Word の既定に寄せた読みやすい値で組む。表の左端は本文の左インデントにそろえる
+（箇条書き・段落番号・->N のすぐ後の表は、その段落の左インデントにそろえる）。
 画像（[IMAGE 1]{30}。仕様.md の5.4。2026-10-29 班長決定）：行の格子の上の端から置き、右に置いた画像には続く本文を
 回り込ませる（本文の行の右インデントを広げる。_wrap_extra を layout.Typesetter が行ごとに引く）。
 2026-10-29 に layout.py から分けた（動きは変えない。分ける前と後で、見本の字の位置・PDF の画素が一致することを確かめた）。
 座標は layout.py と同じく、ポイント単位で x は本文の左端から。
 """
 from dataclasses import dataclass, field
+from math import ceil
 
 from .document import CENTER, RIGHT, TITLE
 from .doctypes import FONT_SIZE, MM
@@ -78,30 +80,54 @@ class BlockMixin:
     # ---------- 表（仕様.md の5.3） ----------
 
     def table_left(self, p):
-        """表の左端（本文の左端から）。直前の見出しに属する本文の左インデント（本文の2行目以降の位置）。"""
+        """表の左端（本文の左端から）。箇条書き・段落番号・->N のすぐ後の表は、その段落の左インデント（2行目以降の位置）。
+        それ以外は、本文の左インデント（2026-11-01 班長指摘。箇条書きの後の表の左端が「・」の位置に出ていた）。"""
+        return self.indents(p.follows)[0] if p.follows else self.body_left(p)
+
+    def body_left(self, p):
+        """直前の見出しに属する本文の左インデント（本文の2行目以降の位置。本文の左端から）。"""
         if not p.body_level or self.first_level is None:
             return 0.0
         x = p.body_level - 1
         return (self.dt.text_left[x] + self.dt.left_add * (p.body_level - self.first_level)) * self.pitch
 
     def column_widths(self, table, width):
-        """列の幅。表の幅を width（本文の右端まで）にする（ブラウザの表の列の幅と同じ考え方）。
+        """列の幅。width は本文の右端までの幅。
+
+        {字数} のある列は、その字数が入る幅にする（2026-11-01 班長決定）。すべての列にあれば、表の右端は列の幅の合計で
+        決まる。指定のない列があれば、残りの幅をその列に配り、表の幅を width にする。width を超えるときは、比で縮める。
+        """
+        pad = 2 * CELL_PAD_X
+        floor = self.pitch + pad
+        fixed = [c and c * self.pitch + pad for c in table.widths]
+        free = [k for k, w in enumerate(fixed) if w is None]
+        taken = sum(w for w in fixed if w is not None)
+        if not free and taken <= width:
+            return fixed
+        if not free or (taken and taken + floor * len(free) >= width):
+            total = taken + floor * len(free)
+            return [(floor if w is None else w) * width / total for w in fixed]
+        rows = [table.header] + table.rows
+        spans = table.distribute
+        limit = width - pad         # 割り付ける幅は、表の幅より広くしない
+        maxw = [max(max(sum(w for _, w in self.make_items(r[k][1], spans.get((ri, k), ()), limit))
+                        for ri, r in enumerate(rows)) + pad, floor) for k in free]
+        minw = [max(max(self.longest_unbreakable(r[k][1], spans.get((ri, k), ()), limit)
+                        for ri, r in enumerate(rows)) + pad, floor) for k in free]
+        for k, w in zip(free, self._auto_widths(maxw, minw, width - taken)):
+            fixed[k] = w
+        return fixed
+
+    @staticmethod
+    def _auto_widths(maxw, minw, width):
+        """指定のない列の幅（ブラウザの表の列の幅と同じ考え方）。表の幅を width にする。
 
         各列の「最小の幅」は折り返せない最も長い字の並びが収まる幅、「最大の幅」は折り返さずに収まる幅。
         全体が収まるときは、最大の幅に比べて余りを足す。収まらないときは、短い列から順に、最大の幅が
         「残りの幅を残りの列で等分した幅」以下の列に最大の幅を与え（折り返さない）、残った幅を長い列に、
         最大の幅に比べて配る（長い説明の列だけが折り返す）。長い列も最小の幅より狭くはしない。
         """
-        rows = [table.header] + table.rows
-        n = len(table.header)
-        pad = 2 * CELL_PAD_X
-        floor = self.pitch + pad
-        spans = table.distribute
-        limit = width - pad         # 割り付ける幅は、表の幅より広くしない
-        maxw = [max(max(sum(w for _, w in self.make_items(r[k][1], spans.get((ri, k), ()), limit))
-                        for ri, r in enumerate(rows)) + pad, floor) for k in range(n)]
-        minw = [max(max(self.longest_unbreakable(r[k][1], spans.get((ri, k), ()), limit)
-                        for ri, r in enumerate(rows)) + pad, floor) for k in range(n)]
+        n = len(maxw)
         if sum(maxw) <= width:
             total = sum(maxw)
             return [w + (width - total) * w / total for w in maxw]
@@ -136,6 +162,17 @@ class BlockMixin:
             for k in others:
                 widths[k] = maxw[k] * (rest - fixed) / total
         return widths
+
+    def column_chars(self, piece):
+        """組んだ表の今の列の幅を、{字数} に書く字数にする（［表］の「列の幅を固定する」）。今折り返さない字が折り返さない
+        よう切り上げ、本文の幅に収まらなければ、いちばん広い列から1字ずつ削る。"""
+        pad = 2 * CELL_PAD_X
+        widths = [b - a for a, b in zip(piece.col_x, piece.col_x[1:])]
+        chars = [max(1, ceil((w - pad) / self.pitch - 0.01)) for w in widths]
+        room = int((self.text_w - piece.col_x[0] - pad * len(chars)) / self.pitch + 0.01)
+        while sum(chars) > room and max(chars) > 1:
+            chars[chars.index(max(chars))] -= 1
+        return chars
 
     def layout_cell(self, align, text, width, spans=()):
         """セルの中を組み、[(行の番号, [(字, x)])] を返す。x はセルの中の左端から。spans は均等割付の範囲。"""
@@ -227,10 +264,10 @@ class BlockMixin:
     # ---------- 画像（[IMAGE 1]{30}。2026-10-29 班長決定。検討_画像の挿入.md の7） ----------
 
     def image_left(self, p):
-        """画像を置ける範囲の左端（本文の左端から）。->N があればその字数、なければ表と同じく本文の左インデント。"""
+        """画像を置ける範囲の左端（本文の左端から）。->N があればその字数、なければ本文の左インデント。"""
         if p.left_indent is not None:
             return min(p.left_indent, self.dt.chars_lines[0] - 1) * self.pitch
-        return self.table_left(p)
+        return self.body_left(p)
 
     def image_size(self, p):
         """(置ける範囲の左端, 幅, 高さ, データがないか)。幅は字数×字送り（置ける幅を超えるときと、字数を省いたときは

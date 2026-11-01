@@ -18,7 +18,7 @@ from pathlib import Path
 
 from .doctypes import DEFAULT_DOC_TYPE, DOC_TYPES, NAIYOU, PAGE_NUMBER_BOTTOM_CENTER, PAGE_NUMBER_LABELS, can_one_width
 from .document import (BODY, JUSTIFY, cell_align_mark, image_mark, image_numbers, is_line_mark, move_wraps_after_marks,
-                       parse, parse_separator, split_cells, split_lead_marks)
+                       parse, parse_separator, separator_widths, split_cells, split_lead_marks)
 from .pseudonym import tokens_in
 
 EXTENSION = ".vamd"
@@ -54,7 +54,7 @@ VA Documentに取り込ませるだけで、実名に戻った文書が正しい
 ・段落の頭の全角空白（字下げ）は、元の行にそのまま残す。新しく段落を書くときは、前後の段落に合わせて、頭に全角空白を置くかどうかを決める。
 ・空行を入れない。元の文書にある空の行は、そのまま残す（空の行は、PDF で1行の空きになる）。ただし、元の文書で、同じ階層（# の数が同じ）の見出しの前に空の行を置いているときは、新しく書くその階層の見出しの前にも、空の行を1行置く（文書の先頭、<<< <<<= の直後、直前が空の行・見出しのときを除く）。
 ・見出しは # の数で階層を表す（# が第１、## が１、### が(1)…）。見出しに番号を書かない。# だけの行のすぐ後に見出しを書くと、2つの見出しを1行にまとめる（「第１　１　当事者」。複合見出し）。表題・日付・宛先など、最初の見出しより前の行には # を付けない。
-・表は、| で列を区切るマークダウンの表で書く。2行目の - = : や、セルの先頭の配置の記号は、私が求めたときを除き、変えない。見出しの行の下を2重線にするときは、2行目のすべての列の - を = にする（|===|===|）。
+・表は、| で列を区切るマークダウンの表で書く。2行目の - = : {字数} や、セルの先頭の配置の記号は、私が求めたときを除き、変えない。見出しの行の下を2重線にするときは、2行目のすべての列の - を = にする（|===|===|）。列の幅を求められたときは、2行目の列の後ろに、その列に入る字数を書く（|---{8}|---:{10}|）。すべての列に書くと、表の右端は列の幅の合計で決まる。
 ・太字は **語**、傍点は *語* で書く（太字と傍点を重ねると ***語***）。元の文書の太字・傍点の記号は残し、新しく付けるのは、私が求めたときだけとする。蛍光ペンの記号（==語==）と均等割付の記号（[語]{5}）は、私が求めたときを除き、付け外ししない。斜体・水平線・引用・リンク・脚注（[^1]）・HTML タグを使わない。1つの段落は1行に書き、段落の途中で改行しない。
 ・依頼が文書の書き直しである場合は、依頼した箇所以外の文字を変えない（要約・言い換えをしない）。
 最終状態：回答を VA Documentに取り込むと、記号がすべて実名に戻り、配置と見出しの階層が元の文書と同じに保たれている。
@@ -86,10 +86,11 @@ PREVIOUS_PROMPTS = {
     "426b6612795fb86f8a3d7e9644b51f436302cbf3f25e4fc6bc067ed640fb7431",   # Ver250 の作業中（「別の事件の文書」を「別の案件の文書」に。配っていない）
     "07968024fdfab1024ba0412d5d5ff17addad8cf274fb251832180f2079799136",   # Ver250 の作業中（書き出しをツールの働きだけを書く形に。配っていない）
     "42dc03c59fe3b3c0e097f1cc75daf78205668925ab397f6644b9405f49d8b85f",   # Ver250〜Ver261
+    "76f170703112e448098019159435667c5dd44d9091d8f9cb73c01f16419c3cf4",   # Ver270（使わない記法に脚注を足した。2026-10-30 班長決定）
 }
 # 今の版の既定の指示の SHA-256。PROMPT を直すと試験（test_vamd）が落ちるので、そのときは、この値を PREVIOUS_PROMPTS に
 # 移してから、新しい値に替える（前の版の登録を忘れないため。2026-10-28）
-PROMPT_SHA256 = "76f170703112e448098019159435667c5dd44d9091d8f9cb73c01f16419c3cf4"   # Ver270〜（使わない記法に脚注を足した。2026-10-30 班長決定）
+PROMPT_SHA256 = "bdbf333d3a3fa4a42e916d950b68d35f70bef8ba76d1190f6f151550fbe376e3"   # Ver280〜（表の列の幅の {字数} を足した。2026-11-01 班長決定）
 
 
 def is_default_prompt(prompt):
@@ -298,9 +299,11 @@ def _marks(lines):
             out.append((s, ln))
             continue
         if s.startswith("|"):
-            # 表のセルの配置の記号（区切りの行の : は比べない）
+            # 表のセルの配置の記号（区切りの行の : は比べない）。列の幅は、字数は比べない（直してよい）
             if parse_separator(s) is None:
                 out += [(m.strip(), ln) for m in map(cell_align_mark, split_cells(s)) if m]
+            else:
+                out += [("{字数}", ln) for w in separator_widths(s) if w]
             continue
         lead = split_lead_marks(move_wraps_after_marks(ln))
         image = image_mark(ln)

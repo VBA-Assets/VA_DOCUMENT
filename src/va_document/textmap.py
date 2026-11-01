@@ -108,6 +108,11 @@ class LayoutMap:
     def cleaned_text(self, line):
         return self.cleaned_lines[line]
 
+    def table_piece(self, orig_line):
+        """元の行を含む表の、組んだ最初の部分（TablePiece）。表でなければ None。"""
+        pieces = self.pieces_of_para.get(self.para_of_line.get(self._cleaned_line(orig_line)))
+        return pieces[0] if pieces else None
+
     # ---------- 確認表示 → エディター ----------
 
     def hit(self, page, x, y):

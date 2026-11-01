@@ -7,8 +7,8 @@ import tkinter as tk
 from bisect import bisect_left
 
 from . import theme
-from .document import (CELL_ALIGN_RE, CENTER_MARK, RIGHT_MARK, cell_separators, is_table_line, parse_separator,
-                       split_cells)
+from .document import (CELL_ALIGN_RE, CENTER_MARK, RIGHT_MARK, SEP_COLUMN_RE, cell_separators, is_table_line,
+                       parse_separator, separator_widths, split_cells, with_column_widths)
 from .undo import undoable
 
 NEW_TABLE_SIZE = (2, 3)     # ［表］で入れる表の列数と行数（見出しの行を含む。マニュアル3.5の例と同じ形。2026-10-31 班長決定）
@@ -96,9 +96,16 @@ class TableCellMixin:
 
     def _table_menu_items(self, span):
         """表の中の［表］のメニュー [(字, 働き)]。"""
-        double = parse_separator(self._line(span[0] + 1))[1]
-        return [("右に列を足す", self.on_table_column),
-                ("見出しの下を1重線に戻す" if double else "見出しの下を2重線にする", self.on_table_double)]
+        separator = self._line(span[0] + 1)
+        double = parse_separator(separator)[1]
+        widths = separator_widths(separator)
+        items = [("右に列を足す", self.on_table_column),
+                 ("見出しの下を1重線に戻す" if double else "見出しの下を2重線にする", self.on_table_double)]
+        if not all(widths):
+            items.append(("列の幅を固定する", self.on_table_fix_widths))
+        if any(widths):
+            items.append(("列の幅を自動に戻す", self.on_table_auto_widths))
+        return items
 
     def _post_table_menu(self, span):
         self._post_button_menu(self.table_button, self._table_menu_items(span))
@@ -150,6 +157,35 @@ class TableCellMixin:
         with undoable(self.text):
             self.text.delete(f"{n}.0", f"{n}.end")
             self.text.insert(f"{n}.0", new)
+        self.text.focus_set()
+
+    def on_table_fix_widths(self):
+        """区切りの行のすべての列に、今の幅の字数を {字数} で書き入れる（後は数字を直すだけで済むように。入力の画面は
+        作らない。2026-11-01 班長決定）。Ctrl+Z 1回で戻せる。"""
+        span = self._table_range(self._cursor()[0])
+        if not span:
+            return
+        self.session.typeset(self.real_text())
+        m = self.session.layout_map
+        piece = m.table_piece(span[0] - 1)
+        if piece is None:
+            return
+        self._set_column_widths(span[0] + 1, m.ts.column_chars(piece))
+        self.status.configure(text="列の幅を固定しました。表の2行目の {字数} を直すと、列の幅が変わります。")
+
+    def on_table_auto_widths(self):
+        """区切りの行の {字数} をすべて外す。Ctrl+Z 1回で戻せる。"""
+        span = self._table_range(self._cursor()[0])
+        if span:
+            self._set_column_widths(span[0] + 1, [])
+
+    def _set_column_widths(self, n, chars):
+        insert = self.text.index("insert")
+        new = with_column_widths(self._line(n), chars)
+        with undoable(self.text):
+            self.text.delete(f"{n}.0", f"{n}.end")
+            self.text.insert(f"{n}.0", new)
+        self.text.mark_set("insert", insert)
         self.text.focus_set()
 
     def _add_table_row(self, after, first):
@@ -302,9 +338,8 @@ class TableCellMixin:
 
         def parts(n, s, e):
             cell = self.text.get(f"{n}.{s + 1}", f"{n}.{e}")
-            core = cell.strip(" 　")
             lead = len(cell) - len(cell.lstrip(" 　"))
-            return s + 1 + lead, core
+            return s + 1 + lead, SEP_COLUMN_RE.search(cell).group(1)      # 後ろの {字数} は変えない
         release = all((parts(*c)[1].startswith(":"), parts(*c)[1].endswith(":")) == want for c in columns)
         for n, s, e in sorted(columns, reverse=True):
             start, core = parts(n, s, e)

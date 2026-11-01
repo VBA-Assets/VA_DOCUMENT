@@ -50,7 +50,7 @@ class EditorMixin(EditorMarkMixin, TableCellMixin, ImageMixin):
 
     def _tokenize_editor(self):
         """エディターの中の、仮名化した語（打った・貼った実名）を記号に置き換える（エディターは常に仮名。
-        2026-10-24 班長決定）。置き換えは Ctrl+Z 1回で戻る（戻すと、次に組み直すときにまた記号になる）。"""
+        2026-10-24 班長決定）。置き換えを Ctrl+Z で戻すときは、その前の操作も一緒に戻す（ai_ops.on_undo）。"""
         if self._loading:
             return
         spans = self.session.dictionary.spans(self.raw_text())

@@ -3,13 +3,26 @@
 
 メインの画面（app.MainWindow）の部品（mixin）。保存（on_save）は file_ops.FileMixin が持つ。
 """
-from tkinter import filedialog, messagebox
+from dataclasses import dataclass
+from tkinter import TclError, filedialog, messagebox
 
 from . import APP_NAME, vamd
 from .dialogs import UNREGISTER, ChangedOutsideDialog, EditDialog, LoadEntriesDialog, RegisterDialog
-from .pseudonym import KINDS, NotRegistrable, trim_selection
+from .pseudonym import KINDS, NotRegistrable, token_label, trim_selection
 from .recover import PdfMismatch
 from .session import OtherFileMissing
+
+
+@dataclass
+class DictionaryStep:
+    """仮名化の登録・解除の1回分。Ctrl+Z・Ctrl+Y で一覧も一緒に戻すために覚える（メモリの中だけ）。
+    Tk の元に戻すの記録には印を付けられないので、書き換えの前後の文章で見分ける。"""
+    registered: bool    # True なら登録、False なら解除
+    word: str
+    kind: str
+    token: str
+    before: str         # 書き換える前の文章
+    after: str          # 書き換えた後の文章
 
 
 class AiMixin:
@@ -40,9 +53,72 @@ class AiMixin:
         chosen = RegisterDialog(self, word, self.session.dictionary).result
         if chosen is None:
             return
+        before = self.raw_text()
         token = self.session.dictionary.register(word, *chosen)
         self._after_dictionary_change()  # エディターの同じ語を、すべて記号に置き換える
+        self._note_dictionary_step(True, word, chosen[0], token, before)
         self.status.configure(text=f"「{word}」を {token} として仮名化しました。")
+
+    def _note_dictionary_step(self, registered, word, kind, token, before):
+        self._redo_steps.clear()
+        if self.raw_text() != before:    # 記号の中の字を選んだときなど、書き換わる語がなければ、Ctrl+Z の記録もない
+            self._undo_steps.append(DictionaryStep(registered, word, kind, token, before, self.raw_text()))
+
+    def on_undo(self, event=None):
+        """Ctrl+Z。仮名化の登録・解除まで戻ったら、一覧の語も一緒に戻す（2026-11-01 班長決定）。記号に置き換えた
+        ところだけを戻すと、次に組み直すときにまた記号になって先へ戻れないので、続けてその前の操作も戻す。"""
+        had_word = self.session.dictionary.spans(self.raw_text())
+        self._undo_once()
+        if not had_word and self.session.dictionary.spans(self.raw_text()):
+            self._undo_once()
+        return "break"
+
+    def on_redo(self, event=None):
+        """Ctrl+Y。on_undo の逆。"""
+        had_word = self.session.dictionary.spans(self.raw_text())
+        self._redo_once()
+        if not had_word and self.session.dictionary.spans(self.raw_text()):
+            self._redo_once()
+        return "break"
+
+    def _undo_once(self):
+        before = self.raw_text()
+        self.text.edit_separator()      # Tk の <<Undo>> と同じく、前後を区切る（戻した所に、次の直しが混ざらないように）
+        try:
+            self.text.edit_undo()
+        except TclError:
+            return                      # 戻す操作がない
+        finally:
+            self.text.edit_separator()
+        step = self._undo_steps[-1] if self._undo_steps else None
+        if step is None or before != step.after or self.raw_text() != step.before:
+            return
+        self._redo_steps.append(self._undo_steps.pop())
+        self._apply_step(step, not step.registered)
+
+    def _redo_once(self):
+        before = self.raw_text()
+        try:
+            self.text.edit_redo()
+        except TclError:
+            return                      # やり直す操作がない
+        step = self._redo_steps[-1] if self._redo_steps else None
+        if step is None or before != step.before or self.raw_text() != step.after:
+            return
+        self._undo_steps.append(self._redo_steps.pop())
+        self._apply_step(step, step.registered)
+
+    def _apply_step(self, step, register):
+        """Ctrl+Z・Ctrl+Y で戻した文章に合わせて、一覧の語を足す・除く。除くときは解除と同じ処理を通す（語が文章に
+        残っていると、保存するときに知らせる）。"""
+        if register:
+            self.session.dictionary.register(step.word, step.kind, token_label(step.token))
+            message = f"「{step.word}」を {step.token} として仮名化しました。"
+        else:
+            self.session.unregister(step.token)
+            message = f"「{step.word}」（{step.token}）の仮名化を解除しました。"
+        self._after_dictionary_change(tokenize=False)
+        self.status.configure(text=message)
 
     def _after_dictionary_change(self, tokenize=True):
         """仮名化した語を登録・変更・解除した後に、一覧・エディター・確認表示・題を新しくする。tokenize なら、
@@ -55,6 +131,7 @@ class AiMixin:
         self._update_title()
 
     def _unregister(self, token):
+        before = self.raw_text()
         e = self.session.dictionary.find(token)
         if e:
             # エディターの記号を、先に元の語に戻す（解除した語が記号のまま残らないように）
@@ -62,6 +139,7 @@ class AiMixin:
         e = self.session.unregister(token)
         self._after_dictionary_change(tokenize=False)
         if e:
+            self._note_dictionary_step(False, e.word, e.kind, e.token, before)
             self.status.configure(text=f"「{e.word}」（{e.token}）の仮名化を解除しました。")
 
     def on_edit_entry(self):
@@ -86,6 +164,9 @@ class AiMixin:
         except NotRegistrable as err:
             messagebox.showerror(APP_NAME, str(err), parent=self)
             return
+        # 語か記号が変わると、覚えている登録・解除を戻せなくなる（Ctrl+Z で一覧は戻らない）
+        self._undo_steps.clear()
+        self._redo_steps.clear()
         if old_token != e.token:
             self._replace_in_editor(old_token, e.token)
         self._after_dictionary_change()  # 新しい語をエディターに打ってあれば、記号にする
