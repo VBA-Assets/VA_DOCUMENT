@@ -607,8 +607,12 @@ class EditorMixin(EditorMarkMixin, TableCellMixin, ImageMixin):
         見出しと本文の間で回るように。2026-10-28 班長指示）。
         見出しにした（レベルを変えた）行には、直前の同じ段の見出しにならって、前の空行と太字を付ける（レベルを変えた見出しは、
         直前の同じ段の見出しになければ外す。2026-10-29 班長指示）。
+        見出しと本文を一緒に選んだときは、見出しのレベルだけを変え、本文の行は変えない（Word のアウトラインと同じ。
+        本文が見出しに変わってしまっていた。2026-11-04 班長指摘）。本文を見出しにするのは、選んだ行に見出しがないときだけ。
         """
         blank = self._blank_range()
+        first, last = self._line_range()
+        with_heading = any(self._outline_heading(self.text.get(f"{n}.0", f"{n}.end")) for n in range(first, last + 1))
 
         def change(line, n):
             if blank:
@@ -623,7 +627,7 @@ class EditorMixin(EditorMarkMixin, TableCellMixin, ImageMixin):
                 if level < 1 or level > 9:
                     return prefix + line[m.end():]
                 return prefix + "#" * level + " " + line[m.end():]
-            if line.strip():
+            if line.strip() and not with_heading:
                 level = self._level_for_plain(n)
                 return prefix + "#" * level + " " + _strip_list(line.lstrip(" 　"))
             return None
@@ -632,6 +636,12 @@ class EditorMixin(EditorMarkMixin, TableCellMixin, ImageMixin):
             self._follow_same_level(self._edit_lines(change), headings)
         if blank:
             self._caret_to_line_end()
+
+    @staticmethod
+    def _outline_heading(line):
+        """on_outline がレベルを変える見出しの行か（配置の記号の付いた見出し、「**# 見出し**」も含む）。"""
+        _, line = _split_align(line) or ("", line)
+        return not _special_line(line) and bool(HEADING_MARK_RE.match(move_wraps_after_marks(line)))
 
     def _blank_range(self):
         """選んだ行（なければカーソルの行）が、すべて字のない行か（空白だけの行も含む）。"""

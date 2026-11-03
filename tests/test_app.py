@@ -1025,6 +1025,18 @@ def test_heading_bullet_number_buttons(window):
         window.text.mark_set("insert", "1.0")
         window.on_outline(step)                      # 本文の行も同じ
         assert _lines(window, 1, 1) == ["## 前文"]
+    # 見出しと本文を一緒に選んだときは、見出しのレベルだけを変え、本文は変えない（2026-11-04 班長指摘）
+    for step, want in ((1, ["### 一", "本文", ":-: #### 二", "本文", "#### 三", "本文"]),
+                       (-1, ["# 一", "本文", ":-: ## 二", "本文", "## 三", "本文"])):
+        window._load_text("## 一\n本文\n:-: ### 二\n本文\n### 三\n本文\n")
+        window.text.tag_add("sel", "1.0", "6.end")
+        window.on_outline(step)
+        assert _lines(window, 1, 6) == want
+    window._load_text("本文\n## 一\n")
+    window.text.tag_add("sel", "1.0", "2.end")
+    window.on_outline(-1)
+    window.on_outline(-1)                            # 見出しが本文に戻っても、選んだ本文は見出しにしない
+    assert _lines(window, 1, 2) == ["本文", "一"]
 
 
 def test_marks_are_blue(window):
