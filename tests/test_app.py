@@ -566,7 +566,7 @@ def test_ribbon_grows_open_save_heading_when_room(window):
     ［箇条書き］［段落番号］は右の列に入らないので2つで1列にし、［太字］などの列は変えない。"""
     rb = window.ribbon
     found = {str(b.cget("text")): b for b in _all_buttons(rb)}
-    grown = [found[t] for t in ("開く", "保存", "見出し")]
+    grown = [found[t] for t in ("開く", "保存", "見出し", "表", "画像")]     # ［表］［画像］は 2026-11-03 班長指示
     rb.reflow(10 ** 6)
     large = sum(g.widths[True] for g in rb.groups)
     small = sum(g.widths[False] for g in rb.groups)
@@ -579,7 +579,7 @@ def test_ribbon_grows_open_save_heading_when_room(window):
     big_images = {str(b.cget("text")): str(b.cget("image")) for b in grown}
     # 大きいアイコンは、面を色分けした自作のアイコン（<名前>_large.svg。2026-10-30 班長決定）
     from va_document import icons
-    for name in ("folder_open", "save", "text_header_2", "person_lock"):
+    for name in ("folder_open", "save", "text_header_2", "person_lock", "table", "image"):
         assert icons.render_large_png(name, 32), name
     assert str(window.register_button.cget("image")[0]) == str(
         window.icons.image("person_lock", size=round(32 * window.icons.scale), large=True))
@@ -1114,6 +1114,10 @@ def test_buttons_have_tooltips(window):
     missing = [text for text, c in labels(window) if text and text not in tooltip.TIPS]
     assert not missing, missing
     assert tooltip.TIPS["ヘッダー"] in tips
+    # 「文書の種類」「ページ番号」は、名前のラベルと選択欄の両方に説明を付ける（2026-11-03 班長指摘）
+    for name, box in (("文書の種類", window.doc_type_box), ("ページ番号", window.page_number_box)):
+        owners = [t.widget for t in window._tooltips if t.text == tooltip.TIPS[name]]
+        assert box in owners and any(isinstance(w, tk.ttk.Label) for w in owners), name
     window.deiconify()
     window.update()
     tip = tips[tooltip.TIPS["保存"]]
@@ -1693,16 +1697,16 @@ def test_indent_button_and_shortcuts(window):
     assert window.text.get("3.0", "3.end") == "次の段落。"
 
 def test_header_footer_buttons(window):
-    """［ヘッダー］：選んだ行の行頭に [HEADER] を付け、もう一度で外す（on_area は [FOOTER] にも使え、もう片方とは
-    付け替える。フッターのボタンは置かない）。配置の記号は残す。見出しの行には付けない。記号は青い字で示し、確認表示では
-    ヘッダーに組む（2026-10-25 班長指示）。"""
-    assert not [b for b in _all_buttons(window) if str(b.cget("text")) == "フッター"]
-    # ［ヘッダー］は「書式」の組の［インデント］の下（2026-10-25 班長指示）
+    """［ヘッダー］［フッター］：選んだ行の行頭に [HEADER] [FOOTER] を付け、もう一度で外す（もう片方とは付け替える）。
+    配置の記号は残す。見出しの行には付けない。記号は青い字で示し、確認表示ではヘッダー・フッターに組む（2026-10-25
+    班長指示。［フッター］は 2026-11-03 班長指示で足した）。"""
+    # ［ヘッダー］は「書式」の組の［インデント］の下、［フッター］はその下（2026-10-25・2026-11-03 班長指示）
     found = {str(b.cget("text")): b for b in _all_buttons(window)}
-    head, indent = found["ヘッダー"], found["インデント"]
-    assert head.master is indent.master is _group(window, "書式").body
-    assert head.grid_info()["column"] == indent.grid_info()["column"]
+    head, foot, indent = found["ヘッダー"], found["フッター"], found["インデント"]
+    assert head.master is foot.master is indent.master is _group(window, "書式").body
+    assert head.grid_info()["column"] == foot.grid_info()["column"] == indent.grid_info()["column"]
     assert int(head.grid_info()["row"]) == int(indent.grid_info()["row"]) + 1
+    assert int(foot.grid_info()["row"]) == int(head.grid_info()["row"]) + 1
     window._load_text("--: 事件番号\n担当\n# 認否\n主張は争う。")
     window.text.tag_add("sel", "1.0", "2.end")
     window.on_area("[HEADER] ")
@@ -1711,9 +1715,9 @@ def test_header_footer_buttons(window):
     assert _lines(window, 1, 2) == ["[HEADER] :-: 事件番号", "[HEADER] :-: 担当"]
     window.text.tag_remove("sel", "1.0", "end")
     window.text.mark_set("insert", "2.0")
-    window.on_area("[FOOTER] ")                             # もう片方とは付け替える
+    foot.invoke()                                           # もう片方とは付け替える
     assert _lines(window, 2, 2) == ["[FOOTER] :-: 担当"]
-    window.on_area("[FOOTER] ")                             # もう一度で外す
+    foot.invoke()                                           # もう一度で外す
     assert _lines(window, 2, 2) == [":-: 担当"]
     window.text.mark_set("insert", "3.0")
     window.on_area("[HEADER] ")                             # 見出しの行には付けない

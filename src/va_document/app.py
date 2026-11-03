@@ -18,7 +18,7 @@ from tkinter import font as tkfont, messagebox, ttk
 from . import APP_NAME, __version__, config, ime, printing, theme, tooltip, vamd
 from .ai_ops import AiMixin
 from .doctypes import DOC_TYPES, PAGE_NUMBER_LABELS
-from .document import (BULLET_MARK, CENTER_MARK, HEADER_MARK, HEADING_BUTTON_MARK, NUMBER_MARK,
+from .document import (BULLET_MARK, CENTER_MARK, FOOTER_MARK, HEADER_MARK, HEADING_BUTTON_MARK, NUMBER_MARK,
                        PAGE_BREAK_MARK, RIGHT_MARK, SECTION_BREAK_MARK, TITLE_MARK, TOC_MARK)
 from .dialogs import OptionsDialog
 from .editor_ops import EditorMixin
@@ -360,19 +360,22 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
         # 2026-10-28 班長決定で［字下げ］をなくした。字下げは行頭の全角空白で書く）
         g.small("インデント", self.on_indent)
         # ［ヘッダー］は、選んだ行の行頭に [HEADER] を付け外しする。配置のボタンと同じく行頭の記号を付け外しするので、
-        # ［インデント］の下に置く。フッターはほぼ使わないのでボタンを置かず、[FOOTER] は手で書く（2026-10-25 班長指示）
+        # ［インデント］の下に置く（2026-10-25 班長指示）。［フッター］は［ヘッダー］の下に置き、行頭に [FOOTER] を付け外し
+        # する（2026-10-25 にはボタンを置かず手で書くとしたが、2026-11-03 班長指示で足した）
         g.small("ヘッダー", lambda: self.on_area(HEADER_MARK))
+        g.small("フッター", lambda: self.on_area(FOOTER_MARK))
         # 1行あけるのは、エディターの空の行で行う（Word と同じ。［空行］は置かない。2026-10-23 班長決定）
         g = rb.group("挿入")
         for label, mark in (("改ページ", PAGE_BREAK_MARK), ("セクション区切り", SECTION_BREAK_MARK),
                             ("目次", TOC_MARK)):   # 載せる見出しのレベルは手で直す（2026-10-24）
             g.small(label, lambda m=mark: self.on_line_mark(m))
         # ［表］：空の表（マークダウンの表）を入れる。表の中で押すと、列の追加などのメニューを出す。Excel・Word の表の
-        # コピーは Ctrl+V で表になる（2026-10-31 班長決定）
-        self.table_button = g.small("表", self.on_table)
+        # コピーは Ctrl+V で表になる（2026-10-31 班長決定）。［表］［画像］も、［開く］などと同じく、幅があれば大きい
+        # ボタンにする（2026-11-03 班長指示）
+        self.table_button = g.small("表", self.on_table, grow=True)
         # ［画像］：画像ファイルを選んで [IMAGE n]{幅} の行を入れる。クリップボードの画像は Ctrl+V（Win+V も）で入れる
         # （2026-10-29 班長決定）。画像の行で押すと、差し替え・幅のメニューを出す（2026-10-31 班長決定）
-        self.image_button = g.small("画像", self.on_image)
+        self.image_button = g.small("画像", self.on_image, grow=True)
         # 見出しの前の空行は、ボタンを置かず、見出しの行を選んで Enter を押して同じ段にそろえる（2026-10-28 班長決定）
         # 検索・置換は「編集」の組にする（Word のリボンのホームのタブと同じ名前。2026-10-23 班長決定）
         g = rb.group("編集")

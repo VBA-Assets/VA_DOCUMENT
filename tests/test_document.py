@@ -18,6 +18,16 @@ def test_marks_need_space():
     assert [p.text for p in ps] == ["見出し", "#見出し", "項目", "-1度", "項目", "2026.10.23に"]
 
 
+def test_keiyaku2_article_space_unless_bracket():
+    """契約書2の「第１条」は、見出しが括弧で始まれば詰め（「第１条（目的）」。VA公用文と同じ）、そうでなければ全角空白を
+    足す（2026-11-03 班長決定）。太字の記号の中の括弧も括弧と見る。字のない見出し（複合見出しの外側）には足さない。
+    契約書1の「第１条　」は変えない。"""
+    ps = parse(["# 見出し", "# （目的）", "# **（委託料）**", "# **見出し**", "# 〔管轄〕", "#", "## 項"], DOC_TYPES["Keiyaku2"])
+    assert [p.number for p in ps] == ["第１条　", "第２条", "第３条", "第４条　", "第５条", "第６条", "１　"]
+    ps = parse(["## （目的）", "### 項"], DOC_TYPES["Keiyaku1"])
+    assert [p.number for p in ps] == ["第１条　", "２　"]
+
+
 def test_align_marks():
     ps = parse([":=: 準備書面", "--: 以上", ":-: 記", ":-- 本文"], SAIBAN)
     assert [p.align for p in ps] == [TITLE, RIGHT, CENTER, "justify"]

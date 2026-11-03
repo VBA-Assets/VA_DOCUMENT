@@ -107,6 +107,7 @@ IMAGE_RE = re.compile(r"\[(?i:image) ([1-9][0-9]{0,2})\](?:\{([1-9][0-9]?)\})?")
 IMAGE_MAX = 999
 HEADING_MARK_RE = re.compile(r"(#{1,9})(?: |[ 　]*$)")
 _NUMBERED_RE = re.compile(r"(\d+)\. ")
+_ARTICLE_TITLE_OPEN = "（(〔【［"     # 契約書2の条の見出しを囲む括弧（この字で始まる見出しは「第１条」の後ろを空けない）
 LIST_MARK_RE = re.compile(r"- |\d+\. ")       # 箇条書き・段落番号の記号
 # ［見出し］［箇条書き］［段落番号］で付ける記号（見出しのレベルは、エディターで # の数を直す。2026-10-25 班長指示）
 HEADING_BUTTON_MARK, BULLET_MARK, NUMBER_MARK = "## ", "- ", "1. "
@@ -663,6 +664,10 @@ def parse(lines, dt):
             p.text, p.bold, p.highlight, p.dots, p.distribute = (found.plain, found.bold, found.highlight, found.dots,
                                                                  found.distribute)
             p.src_cols = [p.src_col + c for c in found.cols]
+        if p.kind == HEADING and p.number.endswith("条") and p.text and p.text[0] not in _ARTICLE_TITLE_OPEN:
+            # 契約書2の「第１条」は、VA公用文では後ろを空けない（「第１条（目的）」と括弧で書く前提）。括弧で
+            # 始まらない見出しは「第１条見出し」と詰まるので、全角空白を足す（2026-11-03 班長決定。VA公用文と違う点）
+            p.number += "　"
         paras.append(p)
         if seen and align == RIGHT and area is None:
             stopped = True

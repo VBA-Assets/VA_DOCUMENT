@@ -30,6 +30,7 @@ BUTTON_ICONS = {
     "見出し": "text_header_2", "箇条書き": "text_bullet_list_ltr", "段落番号": "text_number_list_ltr",
     "改ページ": "document_page_break", "セクション区切り": "document_split_hint", "目次": "text_bullet_list_square",
     "ヘッダー": "document_header", "画像": "image",     # image は自作（Fluent の image にならった線画。2026-10-29）
+    "フッター": "document_footer",     # document_footer は自作（document_header を上下に返した形。2026-11-03）
     "表": "table",      # table は自作（Fluent の table にならった線画。2026-10-31）
     "パスをコピー": "copy", "ファイルから読み込む": "folder_open", "検索": "search", "蛍光ペン": "highlight", "置換": "arrow_swap",
 }
