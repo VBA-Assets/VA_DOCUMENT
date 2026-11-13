@@ -126,12 +126,13 @@ def test_import_answer(session, tmp_path):
 
 
 def test_open_foreign_pdf_as_plain_text(session, tmp_path):
-    import fitz
+    import pdfcheck
+
+    def draw(c):
+        c.setFont("Helvetica", 12)
+        c.drawString(72, 770, "Plain text")
     p = tmp_path / "他.pdf"
-    with fitz.open() as doc:
-        page = doc.new_page()
-        page.insert_text((72, 72), "Plain text", fontsize=12)
-        doc.save(p)
+    p.write_bytes(pdfcheck.make_pdf(draw))
     r = Session(session.cfg).open_pdf(p)
     assert "Plaintext" in r.text.replace(" ", "") and r.messages
 
@@ -164,16 +165,25 @@ def test_registering_a_word_after_save_counts_as_modified(session, tmp_path):
 
 def test_open_pdf_without_text_layer(tmp_path):
     """字の層のない PDF（OCR していないスキャン）は、今の文書を消さずに知らせる（2026-10-24）。"""
-    import fitz
     import pytest
+    from PIL import Image
+    from reportlab.lib.utils import ImageReader
+
+    import pdfcheck
+    from va_document.pdfwriter import DEFAULT_FONTS, register_font
     from va_document.session import NoTextInPdf
+    scan = ImageReader(Image.new("L", (100, 100), 255))
+
+    def page(c, ocr=False):
+        c.drawImage(scan, 0, 0, width=595.3, height=841.9)
+        if ocr:     # スキャンの上に、透明な字（OCR の字の層。描画モード 3）を置く
+            t = c.beginText(72, 741.9)
+            t.setFont(register_font(*DEFAULT_FONTS[0]), 12)
+            t.setTextRenderMode(3)
+            t.textOut("透明な字の層")
+            c.drawText(t)
     pdf = tmp_path / "スキャン.pdf"
-    with fitz.open() as doc:
-        page = doc.new_page()
-        pix = fitz.Pixmap(fitz.csGRAY, fitz.IRect(0, 0, 100, 100), False)
-        pix.clear_with(255)
-        page.insert_image(page.rect, pixmap=pix)
-        doc.save(pdf)
+    pdf.write_bytes(pdfcheck.make_pdf(page))
     s = Session(config.AppConfig(vamd_folder=str(tmp_path / "v")))
     s.typeset("# 認否\n本文。")
     doc_id = s.doc_id
@@ -181,11 +191,8 @@ def test_open_pdf_without_text_layer(tmp_path):
         s.open_pdf(pdf)
     assert s.doc_id == doc_id                       # 今の文書のまま
     # OCR の字の層（透明な字）があれば、取り出せる
-    with fitz.open() as doc:
-        page = doc.new_page()
-        page.insert_image(page.rect, pixmap=pix)
-        page.insert_text((72, 100), "透明な字の層", fontsize=12, fontname="japan", render_mode=3)
-        doc.save(tmp_path / "OCR済み.pdf")
+    (tmp_path / "OCR済み.pdf").write_bytes(pdfcheck.make_pdf(lambda c: page(c, ocr=True)))
+    assert pdfcheck.render(tmp_path / "OCR済み.pdf", gray=True).getextrema() == (255, 255)    # 透明な字は見えない
     assert s.open_pdf(tmp_path / "OCR済み.pdf").text == "透明な字の層"
 
 

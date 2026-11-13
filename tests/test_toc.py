@@ -14,8 +14,7 @@ import json
 import re
 from pathlib import Path
 
-import fitz
-
+import pdfcheck
 from va_document import vamd
 from va_document.cleanup import clean
 from va_document.doctypes import DOC_TYPES
@@ -107,17 +106,14 @@ def test_toc_wrapped_line_hangs_one_char():
     assert abs(second.glyphs[0].x - 3 * ts.pitch) < 0.01
 
 
-def pdf_rows(doc):
+def pdf_rows(pdf):
     """PDF のページごとの行 {基準線の位置: [(字, 左端)]}。"""
     out = []
-    for page in doc:
+    for page in pdfcheck.all_chars(pdf):
         rows = collections.defaultdict(list)
-        for b in page.get_text("rawdict")["blocks"]:
-            for ln in b.get("lines", []):
-                for sp in ln["spans"]:
-                    for ch in sp["chars"]:
-                        if ch["c"].strip():
-                            rows[round(ch["origin"][1])].append((ch["c"], ch["origin"][0]))
+        for c in page:
+            if c["text"].strip():
+                rows[round(c["y"])].append((c["text"], c["x"]))
         out.append({y: sorted(v, key=lambda c: c[1]) for y, v in rows.items()})
     return out
 
@@ -129,8 +125,7 @@ def test_toc_leader_matches_va_kouyoubun_pdf():
     dt = DOC_TYPES["Saiban"]
     ts = Typesetter(dt, keep=False)     # 同上
     lines = ts.layout(parse(clean((DATA / "見本.md").read_text(encoding="utf-8"))[0].splitlines(), dt))
-    with fitz.open(stream=pdf_bytes(ts, lines), filetype="pdf") as ours, fitz.open(DATA / "VA公用文_目次.pdf") as word:
-        ro, rw = pdf_rows(ours), pdf_rows(word)
+    ro, rw = pdf_rows(pdf_bytes(ts, lines)), pdf_rows(DATA / "VA公用文_目次.pdf")
     assert len(ro) == len(rw) == 18
     compared, worst = 0, 0.0
     for po, pw in zip(ro, rw):

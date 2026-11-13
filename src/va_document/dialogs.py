@@ -459,17 +459,17 @@ class PrintDialog(_Dialog):
     """VA Document の「印刷」画面（プリンター・部数・ページ。2026-10-24 班長決定。Windows 11 の新しい印刷画面は、
     プレビューの欄に「このアプリは印刷プレビューをサポートしていません」と出て紛らわしいため）。
     右に印刷プレビューを置く（印刷するページを1枚ずつ、紙に出るものと同じ色〔字だけのページは灰色、画像のあるページは
-    カラー。printing.page_colorspace〕の1ページ全体で見せる。蛍光ペンと仮名化する語の色は、PDF・印刷と同じく付かない。
+    カラー。printing.page_is_color〕の1ページ全体で見せる。蛍光ペンと仮名化する語の色は、PDF・印刷と同じく付かない。
     2026-10-30 班長決定）。pdf_data は印刷する PDF（バイト列）。
     result は (プリンターの名前, DEVMODE〔プロパティで直さなければ None〕, 部数, ページ〔0 から〕のリスト)。やめたら None。"""
 
     PREVIEW_HEIGHT = 380    # 印刷プレビューのページの高さ（画素。画面の拡大率 100% のとき）
 
     def __init__(self, parent, pdf_data, printer_names, chosen, show_properties):
-        import fitz  # PyMuPDF
+        from .pdfpages import PdfPages
         super().__init__(parent, "印刷")
         self.result = None
-        self.doc = fitz.open(stream=pdf_data, filetype="pdf")
+        self.doc = PdfPages(pdf_data)
         self.pages, self.show_properties = len(self.doc), show_properties
         pages = self.pages
         self.modes = {}             # プリンター → プロパティで直した設定
@@ -519,9 +519,9 @@ class PrintDialog(_Dialog):
         side.pack(side="right", fill="y")
         ttk.Label(side, text="印刷プレビュー", style="Note.TLabel").pack(anchor="w")
         scale = max(1.0, self.winfo_fpixels("1i") / 96)
-        rect = self.doc[0].rect
-        self._zoom = self.PREVIEW_HEIGHT * scale / rect.height
-        w, h = round(rect.width * self._zoom), round(rect.height * self._zoom)
+        page_w, page_h = self.doc.size(0)
+        self._zoom = self.PREVIEW_HEIGHT * scale / page_h
+        w, h = round(page_w * self._zoom), round(page_h * self._zoom)
         # 読めない指定のときに出す白い紙（絵の大きさを変えず、画面が伸び縮みしないように）
         self._blank = tk.PhotoImage(width=w, height=h)
         self._blank.put(theme.FIELD_BG, to=(0, 0, w, h))
@@ -549,8 +549,7 @@ class PrintDialog(_Dialog):
 
     def _show_page(self, step=0, reset=False):
         """印刷するページのうち、今の順番から step だけ送ったページを、印刷と同じ色で見せる。"""
-        import fitz  # PyMuPDF
-        from .printing import page_colorspace
+        from .printing import page_is_color
         try:
             pages = self._chosen_pages()
         except ValueError:
@@ -562,17 +561,15 @@ class PrintDialog(_Dialog):
             return
         self._shown = 0 if reset else max(0, min(len(pages) - 1, self._shown + step))
         k = pages[self._shown]
-        page = self.doc[k]
-        pix = page.get_pixmap(matrix=fitz.Matrix(self._zoom, self._zoom), colorspace=page_colorspace(page), alpha=False)
-        self._page_image = tk.PhotoImage(data=pix.tobytes("png"))
+        pix = self.doc.render(k, self._zoom, gray=not page_is_color(self.doc, k))
+        self._page_image = tk.PhotoImage(data=pix.png())
         self.page_view.configure(image=self._page_image, text="")
         self.page_note.configure(text=f"{k + 1} ページ（{self._shown + 1} / {len(pages)}）")
         self._prev.configure(state="normal" if self._shown > 0 else "disabled")
         self._next.configure(state="normal" if self._shown < len(pages) - 1 else "disabled")
 
     def destroy(self):
-        if not self.doc.is_closed:
-            self.doc.close()
+        self.doc.close()
         super().destroy()
 
     def properties(self):

@@ -89,9 +89,11 @@ class FileMixin:
             else:
                 result = self.session.open_text(path)
         except vamd.NoSeparator as e:
+            self.errors.record(e, "開く")
             messagebox.showerror(APP_NAME, f"構文ファイルとして読めません。\n{e}", parent=self)
             return
         except (PdfMismatch, OSError, ValueError) as e:
+            self.errors.record(e, "開く")
             messagebox.showerror(APP_NAME, f"開けませんでした。\n{e}", parent=self)
             return
         if result is None:
@@ -184,11 +186,13 @@ class FileMixin:
             return False
         try:
             self.session.save(text, pdf)
-        except PermissionError:
+        except PermissionError as e:
+            self.errors.record(e, "保存")
             messagebox.showerror(APP_NAME, f"PDF を保存できませんでした。PDF をほかのソフトで開いていれば、閉じてから"
                                  f"もう一度保存してください。\n{pdf}", parent=self)
             return False
         except (OSError, FontNotEmbeddable) as e:
+            self.errors.record(e, "保存")
             messagebox.showerror(APP_NAME, f"保存できませんでした。\n{e}", parent=self)
             return False
         config.save(self.cfg)
@@ -324,6 +328,7 @@ class FileMixin:
         try:
             data = self.session.preview_pdf(text)
         except Exception as e:
+            self.errors.record(e, "印刷")
             messagebox.showerror(APP_NAME, f"印刷するページを組めませんでした。\n{e}", parent=self)
             return
         # VA Document の「印刷」画面で選ぶ（2026-10-24 班長決定。Windows の新しい印刷画面の紛らわしい知らせを避ける）。
@@ -337,6 +342,7 @@ class FileMixin:
         try:
             hdc = printing.make_dc(name, mode, copies)
         except printing.PrintError as e:
+            self.errors.record(e, "印刷")
             messagebox.showerror(APP_NAME, f"印刷できませんでした。\n{e}", parent=self)
             return
 
@@ -350,6 +356,7 @@ class FileMixin:
             doc_name = self.session.pdf_path.stem if self.session.pdf_path else APP_NAME
             n = printing.print_pdf(data, hdc, doc_name, page_list, progress=progress)
         except (printing.PrintError, OSError) as e:
+            self.errors.record(e, "印刷")
             messagebox.showerror(APP_NAME, f"印刷できませんでした。\n{e}", parent=self)
             self.status.configure(text="印刷できませんでした。")
             return

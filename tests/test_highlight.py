@@ -1,6 +1,5 @@
 """蛍光ペン（==文字==。確認表示だけで黄色に塗り、保存する PDF と印刷には出さない。2026-10-24 班長指示）。"""
-import fitz
-
+import pdfcheck
 from va_document import config
 from va_document.doctypes import DOC_TYPES
 from va_document.document import RIGHT, TITLE, parse, split_inline
@@ -36,9 +35,7 @@ def test_parse_reads_highlight_with_marks():
 
 
 def yellow_rects(data):
-    with fitz.open(stream=data, filetype="pdf") as doc:
-        return [d["rect"] for page in doc for d in page.get_drawings()
-                if d.get("fill") and all(abs(a - b) < 0.01 for a, b in zip(d["fill"], (1, 1, 0)))]
+    return pdfcheck.filled(data, (1, 1, 0))
 
 
 def test_yellow_only_in_preview():
@@ -76,11 +73,9 @@ def test_pseudonyms_are_tinted_in_preview_only():
     text = "# 認否\n甲野太郎の主張は争う。\n| 当事者 | 主張 |\n|---|---|\n| 甲野太郎 | 争う |"
 
     def tinted(data):
-        with fitz.open(stream=data, filetype="pdf") as doc:
-            return [d["rect"] for page in doc for d in page.get_drawings()
-                    if d.get("fill") and all(abs(a - b) < 0.01 for a, b in zip(d["fill"], (0xd9 / 255, 0xf2 / 255, 0xd9 / 255)))]
+        return pdfcheck.filled(data, (0xd9 / 255, 0xf2 / 255, 0xd9 / 255))
     rects = tinted(s.preview_pdf(text, highlight=True))
     assert len(rects) == 2                                        # 本文の「甲野太郎」と、セルの「甲野太郎」
-    assert all(abs(r.width - 4 * 12) < 13 for r in rects)        # 4字ぶん（字の間隔の分の揺れは許す）
+    assert all(abs(r["width"] - 4 * 12) < 13 for r in rects)     # 4字ぶん（字の間隔の分の揺れは許す）
     assert not tinted(s.preview_pdf(text))
 

@@ -1,17 +1,27 @@
 # VA Document 依存ライブラリ
 # いずれもローカルで完結するもの（外部と通信しないことを選ぶ条件とする。仕様.md の10）
+# VA Document は MIT License で配るので、MIT License と両立するものだけを使う（Ver300。PyMuPDF〔AGPL-3.0〕は使わない）
 
-# PDF の作成（行組みの結果を1字ずつ置き、書体を埋め込む）
+# PDF の作成（行組みの結果を1字ずつ置き、書体を埋め込む）。BSD
 reportlab>=4.0
 
-# PDF の読み取り（確認表示の画像、ファイル識別子の読み書き、AI 用ファイルとの突き合わせ）
-PyMuPDF>=1.24
+# PDF の仕上げ（画像・識別子・文書情報）と、識別子・画像の読み出し。BSD-3
+pypdf>=6.0
 
-# 書体ファイルの埋め込みの許可（fsType）の確認
+# PDF の字の読み取り（開き直したときの対応表の作り直し、ほかのソフトで作った PDF の取り込み）。MIT（pdfminer.six も MIT）
+pdfplumber>=0.11
+
+# プレビュー・印刷（PDF のページを画像にする。PDFium）。Apache-2.0・BSD-3
+pypdfium2>=5.0
+
+# 書体ファイルの埋め込みの許可（fsType）の確認。MIT
 fonttools>=4.40
 
+# 画像の取り込み・ボタンのアイコン・プレビューの画像。MIT-CMU
+Pillow>=10.0
+
 # エクスプローラーからのドラッグアンドドロップ（Windows・Mac 用の tkdnd を同梱。VA FAX と同じ。
-# なくても、落とせないだけで動く）
+# なくても、落とせないだけで動く）。MIT
 tkinterdnd2>=0.6
 
 # テスト
@@ -20,5 +30,4 @@ pytest>=8.0
 # 実行ファイル化（配布用）
 pyinstaller>=6.0
 
-# アプリのアイコンを作る（scripts/generate_icon.py）・テストでアイコンを読む
-Pillow>=10.0
+# 開発のときだけ（requirements には入れない）：アイコンの PNG を SVG から作る scripts\make_icons.py は PyMuPDF を使う

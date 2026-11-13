@@ -205,9 +205,11 @@ class AiMixin:
                 vamd_path, pdf_path = (other, e.found) if e.kind == "vamd" else (e.found, other)
             loaded = self.session.entries_from(vamd_path, pdf_path, self.real_text())
         except vamd.NoSeparator as e:
+            self.errors.record(e, "仮名化する語の読み込み")
             messagebox.showerror(APP_NAME, f"構文ファイルとして読めません。\n{e}", parent=self)
             return
         except (PdfMismatch, OSError, ValueError) as e:
+            self.errors.record(e, "仮名化する語の読み込み")
             messagebox.showerror(APP_NAME, f"読み込めませんでした。\n{e}", parent=self)
             return
         plan = loaded.plan
@@ -276,6 +278,7 @@ class AiMixin:
         try:
             content, r = self.session.review_answer(answer_text, text)
         except (vamd.NoSeparator, vamd.OtherDocument) as e:
+            self.errors.record(e, "AI の回答の取り込み")
             messagebox.showerror(APP_NAME, f"取り込めません。\n{e}", parent=self)
             return False
         new_text = self.session.apply_answer(content, text)

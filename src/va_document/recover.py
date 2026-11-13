@@ -21,13 +21,12 @@ import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
-import fitz  # PyMuPDF
-
 from .doctypes import DEFAULT_DOC_TYPE, NAIYOU, PAGE_NUMBER_BOTTOM_CENTER, PAGE_NUMBER_NONE, doc_type_for
 from .document import FOOTER, HEADER, SECTION_BREAK, TABLE, TOC, parse
 from .document import heading_label
 from .layout import toc_entries
 from .layout import Typesetter
+from .pdftext import pdf_chars
 from .pdfwriter import page_number_text, read_id
 from .pseudonym import TOKEN_RE, Dictionary, normalize_token
 
@@ -50,47 +49,45 @@ class Recovery:
     exact: bool = False                             # 求めた語で戻すと、PDF の文章と一字残らず一致したか
 
 
-def pdf_body_text(path, ts):
+def pdf_body_text(path, ts, pages=None):
     """PDF の本文の範囲の字を、描いた順に1本の文字列にする（空白も残す。名前の中の空白を戻すため）。
-    (文字列, [(ページ, 字の左端, 基準線)]) を返す（位置は均等割付の範囲を求めるのに使う）。"""
+    (文字列, [(ページ, 字の左端, 基準線)]) を返す（位置は均等割付の範囲を求めるのに使う）。pages は pdftext.pdf_chars の
+    結果（読んであれば渡す。同じ PDF を2度読まないため）。"""
     top = ts.margin_top
     bottom = ts.margin_top + ts.lines_page * ts.line_pitch
     out, where = [], []
-    with fitz.open(path) as doc:
-        for pi, page in enumerate(doc):
-            for span in page.get_texttrace():
-                for ch in span["chars"]:
-                    x, y = ch[2]    # 字の左端と基準線（用紙の上端から）
-                    # 本文の左端より左（行番号）は除く
-                    if top < y <= bottom + 1 and x >= ts.margin_left - 1:
-                        out.append(chr(ch[0]))
-                        where.append((pi, x, y))
+    for pi, chars in enumerate(pdf_chars(path) if pages is None else pages):
+        for ch, x, y in chars:      # 字の左端と基準線（用紙の上端から）
+            # 本文の左端より左（行番号）は除く
+            if top < y <= bottom + 1 and x >= ts.margin_left - 1:
+                out.append(ch)
+                where.append((pi, x, y))
     return "".join(out), where
 
 
-def pdf_area_text(path, ts, page_number=PAGE_NUMBER_BOTTOM_CENTER):
+def pdf_area_text(path, ts, page_number=PAGE_NUMBER_BOTTOM_CENTER, pages=None):
     """PDF のヘッダー・フッター（上下の余白）の字を1本の文字列にする。ページ番号（ページの最後に描く。pdfwriter）は
     除く。ヘッダーの字のあるページのヘッダーをページの順に並べ、続けてフッターを並べる（フッターは、字のないページを
     飛ばし、前のページと同じものは1つにまとめる。セクションの全ページに出るため）。ページごとの初めに _AREA_SEP を
-    入れる。(文字列, 位置) を返す。"""
+    入れる。(文字列, 位置) を返す。pages は pdf_body_text と同じ。"""
     top = ts.margin_top
     bottom = ts.margin_top + ts.lines_page * ts.line_pitch
     heads, feet, prev = [], [], None
-    with fitz.open(path) as doc:
-        for pi, page in enumerate(doc):
-            chars = [(chr(ch[0]), (pi, *ch[2])) for span in page.get_texttrace() for ch in span["chars"]]
-            if page_number != PAGE_NUMBER_NONE:
-                s = page_number_text(page_number, pi + 1, len(doc))
-                if "".join(c for c, _ in chars[-len(s):]) == s:
-                    chars = chars[:-len(s)]
-            head = [c for c in chars if c[1][2] <= top]
-            foot = [c for c in chars if c[1][2] > bottom + 1]
-            if "".join(c for c, _ in head).strip():
-                heads.append(head)
-            text = "".join(c for c, _ in foot)
-            if text.strip() and text != prev:
-                feet.append(foot)
-                prev = text
+    pages = pdf_chars(path) if pages is None else pages
+    for pi, page in enumerate(pages):
+        chars = [(ch, (pi, x, y)) for ch, x, y in page]
+        if page_number != PAGE_NUMBER_NONE:
+            s = page_number_text(page_number, pi + 1, len(pages))
+            if "".join(c for c, _ in chars[-len(s):]) == s:
+                chars = chars[:-len(s)]
+        head = [c for c in chars if c[1][2] <= top]
+        foot = [c for c in chars if c[1][2] > bottom + 1]
+        if "".join(c for c, _ in head).strip():
+            heads.append(head)
+        text = "".join(c for c, _ in foot)
+        if text.strip() and text != prev:
+            feet.append(foot)
+            prev = text
     out, where = [], []
     for chars in heads + feet:
         out.append(_AREA_SEP + "".join(c for c, _ in chars))
@@ -278,8 +275,9 @@ def recover(vamd_lines, pdf_path, dt, page_number=PAGE_NUMBER_BOTTOM_CENTER):
     """突き合わせて Recovery を返す。page_number は PDF のページ番号の位置（ヘッダー・フッターの字から除くため）。"""
     ts = Typesetter(dt)
     v_plain, mark_to_token, spans = vamd_body_text(vamd_lines, dt)
-    p_plain, where = pdf_body_text(pdf_path, ts)
-    area_text, area_where = pdf_area_text(pdf_path, ts, page_number)
+    pages = pdf_chars(pdf_path)
+    p_plain, where = pdf_body_text(pdf_path, ts, pages)
+    area_text, area_where = pdf_area_text(pdf_path, ts, page_number, pages)
     p_plain, where = p_plain + area_text, where + area_where
     v, p = _separate_distribute(v_plain, p_plain, where, spans, mark_to_token, ts)
     sm = difflib.SequenceMatcher(None, v, p, autojunk=False)

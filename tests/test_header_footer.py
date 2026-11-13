@@ -1,6 +1,7 @@
 """ヘッダー・フッター（[HEADER] [FOOTER]。2026-10-25 班長指示）。"""
-import fitz
 import pytest
+
+import pdfcheck
 
 from va_document import config, vamd
 from va_document.cleanup import clean_lines
@@ -140,8 +141,7 @@ def test_naiyou_has_no_header():
 
 def test_pdf_draws_header_and_moved_page_number():
     ts, _, lines = layout(["[HEADER] --: **事件番号**", "[FOOTER] 事務所", "本文"], KOUYOU, PAGE_NUMBER_TOP_RIGHT)
-    with fitz.open(stream=pdf_bytes(ts, lines, page_number=PAGE_NUMBER_TOP_RIGHT), filetype="pdf") as doc:
-        chars = [(chr(c[0]), c[2][1]) for s in doc[0].get_texttrace() for c in s["chars"]]
+    chars = [(c["text"], c["y"]) for c in pdfcheck.chars(pdf_bytes(ts, lines, page_number=PAGE_NUMBER_TOP_RIGHT))]
     ys = {}
     for ch, y in chars:
         ys.setdefault(ch, y)
@@ -156,8 +156,7 @@ def test_pdf_draws_header_and_moved_page_number():
 def test_line_numbers_do_not_count_header():
     from va_document.pdfwriter import LINE_NUMBER_STEP
     ts, _, lines = layout(["[HEADER] 一"] + ["本文"] * 5)
-    with fitz.open(stream=pdf_bytes(ts, lines, line_numbers=True), filetype="pdf") as doc:
-        text = doc[0].get_text()
+    text = pdfcheck.text(pdf_bytes(ts, lines, line_numbers=True), 0)
     assert str(LINE_NUMBER_STEP) in text and "10" not in text
 
 

@@ -51,8 +51,9 @@ def _clear_readonly(func, path, exc):
 
 
 def build(version: str) -> Path:
-    if not re.fullmatch(r"Ver\d{3}", version):
-        raise SystemExit("版は「Ver100」の形で指定してください。")
+    # 2桁目は 9 の次を A とする（Ver2A0。2026-11-13 班長決定）
+    if not re.fullmatch(r"Ver[0-9A-Z]{3}", version):
+        raise SystemExit("版は「Ver100」「Ver2A0」の形で指定してください。")
     exe = ROOT / "dist" / "VA_Document.exe"
     manual = ROOT / "docs" / "manual" / f"VA_Document_操作マニュアル_{version}.pdf"
     required = [exe, manual, ROOT / "LICENSE", ROOT / "THIRD_PARTY_NOTICES.txt", ROOT / "README.md"]

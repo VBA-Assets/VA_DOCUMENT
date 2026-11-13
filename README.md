@@ -5,7 +5,7 @@ VA Document は、AI（Claude など）で書面を起案・推敲するとき�
 Ver160 までは「VA DocuMake」という名前でした（2026-10-27 の Ver200 で改めました）。
 
 - 配布：[VBAアセット](https://vba-assets.net/)（実行ファイルとインストーラーは、サイトの記事からダウンロードしてください）
-- ライセンス：GNU Affero General Public License 第3版（[LICENSE](LICENSE)）。使っている部品のライセンスは [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt)
+- ライセンス：MIT License（[LICENSE](LICENSE)。Ver300 から。Ver2A0 までは GNU Affero General Public License 第3版）。使っている部品のライセンスは [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt)
 - 操作マニュアル：[docs/manual/VA_Document_操作マニュアル.md](docs/manual/VA_Document_操作マニュアル.md)
 - 仕様：[仕様.md](仕様.md)
 
@@ -49,8 +49,10 @@ python3 main.py
 
 ## ライセンス
 
-Copyright (C) 2026 VBAアセット
+Copyright (c) 2026 VBAアセット
 
-このプログラムはフリーソフトウェアです。Free Software Foundation が公表した GNU Affero General Public License 第3版の条件の下で、再配布・改変できます。このプログラムは有用であることを願って配布されますが、何の保証もありません（商品性や特定の目的への適合性の保証もありません）。詳しくは [LICENSE](LICENSE) をご覧ください。
+MIT License で公開しています。著作権の表示とライセンスの文を残せば、使う・直す・配る・売ることが自由にできます。何の保証もありません。詳しくは [LICENSE](LICENSE) をご覧ください。
 
-PDF の表示・印刷・読み書きに、AGPL-3.0 で公開されている PyMuPDF を使っているため、このライセンスにしています。
+Ver2A0 までは、PDF の表示・印刷・読み書きに AGPL-3.0 の PyMuPDF を使っていたため、GNU Affero General Public License 第3版で公開していました。Ver300 で、PDF を扱う部品を MIT License と両立するもの（pdfplumber・pypdf・pypdfium2）に替え、MIT License に改めました。それまでに公開した版は、手に入れた方にとっては AGPL-3.0 のままです。
+
+ボタンのアイコンの PNG（`src/va_document/icons/png/`）は、開発のときに `scripts/make_icons.py` で SVG から作ります。このスクリプトだけは PyMuPDF を使います（開発の PC に入れるもので、`requirements.txt` には入れていません。配布物には入りません）。

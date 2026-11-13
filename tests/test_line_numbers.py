@@ -1,6 +1,5 @@
 """行番号（VA公用文と同じ：5行ごと、ページごとに 1 から、表の中の行は数えない。2026-10-24 班長指示）。"""
-import fitz
-
+import pdfcheck
 from va_document import vamd
 from va_document.doctypes import DOC_TYPES
 from va_document.document import parse
@@ -11,16 +10,23 @@ from va_document.recover import rebuild_dictionary
 DT = DOC_TYPES["Saiban"]
 
 
+def left_numbers(data, ts):
+    """本文の左の余白の字を、基準線ごとにまとめたもの。ページごとに [(字, [字の左端], 基準線, 字の大きさ)]（描いた順）。"""
+    out = []
+    for chars in pdfcheck.all_chars(data):
+        groups = {}
+        for c in chars:
+            if c["x"] < ts.margin_left - 1:
+                groups.setdefault(round(c["y"], 2), []).append(c)
+        out.append([("".join(c["text"] for c in cs), [c["x"] for c in cs], cs[0]["y"], cs[0]["size"])
+                    for cs in groups.values()])
+    return out
+
+
 def numbers(data, ts):
     """PDF の行番号 [(ページ, 番号, 基準線の y)]。"""
-    out = []
-    with fitz.open(stream=data, filetype="pdf") as doc:
-        for k, page in enumerate(doc):
-            for span in page.get_texttrace():
-                text = "".join(chr(c[0]) for c in span["chars"])
-                if text.isdigit() and span["chars"][0][2][0] < ts.margin_left - 1:
-                    out.append((k + 1, int(text), round(span["chars"][0][2][1], 2)))
-    return out
+    return [(k + 1, int(text), round(y, 2)) for k, page in enumerate(left_numbers(data, ts))
+            for text, _, y, _ in page if text.isdigit()]
 
 
 def test_every_fifth_line_counting_blank_lines_not_table_rows():
@@ -46,9 +52,7 @@ def test_numbers_restart_on_each_page_and_align_right():
     per_page = ts.lines_page // 5
     assert [n for p, n, _ in found if p == 1] == [5 * k for k in range(1, per_page + 1)]
     assert [n for p, n, _ in found if p == 2] == [5 * k for k in range(1, (29 - ts.lines_page) // 5 + 1)]
-    with fitz.open(stream=data, filetype="pdf") as doc:
-        last = [span["chars"][-1][2][0] for span in doc[0].get_texttrace()
-                if span["chars"][0][2][0] < ts.margin_left - 1]
+    last = [xs[-1] for _, xs, _, _ in left_numbers(data, ts)[0]]
     assert last and all(abs(x - (ts.margin_left - LINE_NUMBER_LAST_X)) < 0.01 for x in last)    # 右をそろえる
 
 
@@ -83,13 +87,12 @@ def test_line_numbers_match_va_kouyoubun():
     text = (Path(__file__).resolve().parent / "data" / "裁判所" / "見本.md").read_text(encoding="utf-8").splitlines()
     ts = Typesetter(DT, keep=False)     # VA公用文の PDF と比べるので、見出しと本文を分けない処理をしない
     data = pdf_bytes(ts, ts.layout(parse(text, DT)), line_numbers=True)
-    with fitz.open(stream=data, filetype="pdf") as doc:
-        assert len(doc) == 3
-        for k, page in enumerate(doc):
-            found = [(int("".join(chr(c[0]) for c in s["chars"])), [c[2][0] for c in s["chars"]], s["chars"][0][2][1],
-                      s["size"]) for s in page.get_texttrace() if s["chars"][0][2][0] < ts.margin_left - 1]
-            want = WORD_NUMBERS if k < 2 else []
-            assert [n for n, *_ in found] == [n for n, *_ in want]
-            for (n, xs, y, size), (_, wxs, wy) in zip(found, want):
-                assert all(abs(a - b) < 0.1 for a, b in zip(xs, wxs)) and abs(y - wy) < 0.2 and abs(size - 8.04) < 0.01
+    pages = left_numbers(data, ts)
+    assert len(pages) == 3
+    for k, page in enumerate(pages):
+        found = [(int(text), xs, y, size) for text, xs, y, size in page]
+        want = WORD_NUMBERS if k < 2 else []
+        assert [n for n, *_ in found] == [n for n, *_ in want]
+        for (n, xs, y, size), (_, wxs, wy) in zip(found, want):
+            assert all(abs(a - b) < 0.1 for a, b in zip(xs, wxs)) and abs(y - wy) < 0.2 and abs(size - 8.04) < 0.01
 

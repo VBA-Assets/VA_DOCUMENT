@@ -120,11 +120,9 @@ def test_other_file_missing_and_wrong_files(cfg, first, tmp_path):
 
 
 def _plain_pdf(tmp_path):
-    import fitz
+    import pdfcheck
     path = tmp_path / "ふつう.pdf"
-    with fitz.open() as doc:
-        doc.new_page()
-        doc.save(str(path))
+    path.write_bytes(pdfcheck.make_pdf(lambda c: None))
     return path
 
 

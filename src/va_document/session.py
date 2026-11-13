@@ -12,13 +12,12 @@ import hashlib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-import fitz  # PyMuPDF
-
 from . import vamd
 from .cleanup import clean_lines
 from .doctypes import doc_type_for
 from .document import IMAGE_MAX, image_numbers, parse
 from .layout import Typesetter
+from .pdftext import plain_text as pdf_plain_text
 from .pdfwriter import pdf_bytes, read_id, read_images, write_pdf
 from .pseudonym import Dictionary, NotRegistrable, tokens_in, trim_selection
 from .recover import Recovery, rebuild_dictionary
@@ -455,17 +454,3 @@ def _stamp(path):
 
 def _normalized(text):
     return "\n".join(ln.rstrip() for ln in text.strip("\n").splitlines())
-
-
-def pdf_plain_text(path):
-    """PDF の文字を、塊（段落）ごとに行をつないで取り出す。"""
-    paras = []
-    with fitz.open(str(path)) as doc:
-        for page in doc:
-            for b in page.get_text("blocks", sort=True):
-                if b[6] != 0:      # 画像の塊
-                    continue
-                text = "".join(s.strip() for s in b[4].splitlines())
-                if text and not text.isdigit():
-                    paras.append(text)
-    return "\n".join(paras)

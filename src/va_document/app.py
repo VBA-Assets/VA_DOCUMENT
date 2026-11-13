@@ -15,7 +15,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import font as tkfont, messagebox, ttk
 
-from . import APP_NAME, __version__, config, ime, printing, theme, tooltip, vamd
+from . import APP_NAME, __version__, config, diagnostics, ime, printing, theme, tooltip, vamd
 from .ai_ops import AiMixin
 from .doctypes import DOC_TYPES, PAGE_NUMBER_LABELS
 from .document import (BULLET_MARK, CENTER_MARK, FOOTER_MARK, HEADER_MARK, HEADING_BUTTON_MARK, NUMBER_MARK,
@@ -92,6 +92,8 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
 
     def __init__(self, cfg=None, open_path=None):
         super().__init__()
+        # 起きた誤りの記録（型と場所だけ。［ヘルプ］→［診断情報をコピー］に載せる。2026-11-10 班長決定）
+        self.errors = diagnostics.ErrorLog()
         theme.apply_theme(self)
         self.cfg = cfg or config.load()
         # オプションのエディターの書体・字の大きさ・行の間隔（2026-10-24 班長指示）
@@ -229,6 +231,7 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
         （2026-10-30 班長決定。それまでは、左のプレビューをウィンドウの上下いっぱいに置き、リボンは右の入力欄の上に
         置いていた。リボンが右の構文ファイルの名前の下にあり、PDF にも関わる「ファイル」の組が、構文ファイルだけの
         操作に見えたため）。左右の上には、それぞれのファイルの名前と、そのファイルの操作のボタンを置く。"""
+        self._build_menu()
         self._build_ribbon(self)
         self.panes = panes = tk.PanedWindow(self, orient="horizontal", sashwidth=6, bd=0)
         panes.pack(fill="both", expand=True, padx=8, pady=(0, 8))
@@ -312,11 +315,11 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
         # ［保存］は、いつも同じ見た目にする（保存していない変更があるときの青い枠は、2026-10-26 に外した。班長決定。
         # 保存していない変更は題の「＊」で示し、閉じる・開く・印刷・コピーの前に保存する〔尋ねる〕）
         self.save_button = g.small("保存", self.on_save, grow=True)
-        # ［閉じる］は今の文書を閉じて新しい文書にする（VA Document は終わらない）。［オプション］は構文ファイルの
-        # 保存場所とエディターの見た目（2026-10-24 班長指示）
+        # ［閉じる］は今の文書を閉じて新しい文書にする（VA Document は終わらない）。［オプション］（構文ファイルの
+        # 保存場所とエディターの見た目。2026-10-24 班長指示）は、リボンに置かず、メニューバーの「ファイル」からだけ開く
+        # （2026-11-14 班長指示。_build_menu）
         g.small("閉じる", self.on_close_document)
         # 過去の文書を使い回す［コピーとして開く］［名前を付けて保存］は置かない（2026-10-25 班長決定。仕様.md の9.4）
-        g.small("オプション", self.on_options)
         # 文書の種類・ページ番号の選択欄と、行番号・番号1字のチェックは「レイアウト」の組、文字列に記号を付けるボタンは
         # 「書式」の組にする（2026-10-25 班長指示で1つの「書式」の組から分け、2026-10-27 班長指示で［見出し］［箇条書き］
         # ［段落番号］を「スタイル」から「書式」の左端の列に移した）。組の名前は、見出しなどを移した後の中身に合わせて、
@@ -476,6 +479,116 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
         # じゃまになるため、右端にする。2026-10-24 班長指示）
         self.text.tag_configure("changed", rmargin=theme.CHANGE_BAR_WIDTH, rmargincolor=theme.ACCENT)
         self.text.tag_lower("found", "sel")
+
+    # ======================================================================
+    # ヘルプ・診断情報（2026-11-10 班長決定：Python のツールに、次の版上げのときに入れる。VA mints・VA Case と同じ形）
+    # ======================================================================
+
+    def _build_menu(self):
+        """メニューバーの「ファイル」（開く・保存・閉じる・オプション）と「ヘルプ」（診断情報をコピー・VA Document
+        について）。ほかの操作はリボンに置く。［オプション］は、リボンから外し、「ファイル」からだけ開く（2026-11-14 班長指示。項目の名前の「…」は、
+        画面が開くことを示す。VA Case の「この PC の設定…」と同じ）。
+
+        メニューバーは、ウィンドウを表示してから付ける（after_idle）。表示する前に、ウィンドウのアイコンとメニューバーを
+        両方付けると、Windows の Tk が、覚えておいたウィンドウの大きさ（高さがメニューバーの分だけ縮む）か位置を
+        取り違え、起動するたびにウィンドウが縮んだり、前の位置に戻らなかったりする（2026-11-13 に確かめた）。"""
+        bar = tk.Menu(self)
+        f = tk.Menu(bar, tearoff=False)
+        # ［開く］［保存］［閉じる］は、リボンのボタンと同じ操作（2026-11-14 班長指示「［ファイル］に項目を足す」）。
+        # ［オプション…］は一番下に置き、［印刷］は置かない（印刷はプレビューの上の［印刷］から。同日 班長指示）。
+        # 「…」は画面が開くもの
+        f.add_command(label="開く…", command=lambda: self.on_open(), accelerator="Ctrl+O")
+        f.add_command(label="保存", command=lambda: self.on_save(), accelerator="Ctrl+S")
+        f.add_command(label="閉じる", command=lambda: self.on_close_document())
+        f.add_separator()
+        f.add_command(label="オプション…", command=lambda: self.on_options())
+        bar.add_cascade(label="ファイル", menu=f)
+        self.file_menu = f
+        h = tk.Menu(bar, tearoff=False)
+        h.add_command(label="診断情報をコピー", command=self.on_copy_diagnostics)
+        h.add_separator()
+        h.add_command(label=f"{APP_NAME} について", command=self.on_about)
+        bar.add_cascade(label="ヘルプ", menu=h)
+        self.menu_bar, self.help_menu = bar, h
+        self.after_idle(lambda: self.configure(menu=bar))
+
+    ABOUT_LINE = "実名を AI に渡さずに、VA公用文と同じ書式の文書を作る"
+
+    def about_text(self):
+        """「について」の文。VA Case・VA FAX と同じ形：名前と版・1行の説明・空の行・作った者・ライセンス（2026-11-14
+        班長指示「「について」の書き方は、VA CASEに合わせる」。ライセンスは Ver300 から MIT License。それまでは AGPL-3.0。
+        部品のライセンスは、配布物に添える THIRD_PARTY_NOTICES.txt に書く）。"""
+        return f"{APP_NAME}  {VERSION_LABEL}\n{self.ABOUT_LINE}\n\nVBAアセット（vba-assets.net）\nMIT License"
+
+    def on_about(self):
+        messagebox.showinfo(APP_NAME, self.about_text(), parent=self)
+
+    def report_callback_exception(self, exc_type, exc, tb):
+        """画面の処理（ボタン・キーなど）で起きた、予期しない誤りを覚える（Tk の既定どおり、出力にも出す）。"""
+        self.errors.record(exc, "画面の処理")
+        super().report_callback_exception(exc_type, exc, tb)
+
+    def on_copy_diagnostics(self):
+        """診断情報をクリップボードに写す（利用者がメニューを選んだときだけクリップボードを使う。仕様.md の10）。"""
+        text = self.diagnostic_text()
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        messagebox.showinfo(APP_NAME, "診断情報をコピーしました。\n\n"
+                            "不具合を相談するときは、これを貼り付けて渡してください。版・環境・設定・件数・誤りの起きた"
+                            "場所だけが入っていて、文章の中身、仮名化した語、ファイルの名前、ファイルやフォルダの場所は"
+                            "入っていません。\n"
+                            "渡す前に、メモ帳などに貼り付けて、中身を確かめることができます。", parent=self)
+
+    def diagnostic_text(self):
+        """診断情報の文。中身（文章・仮名化した語と記号・ファイルの名前・場所・例外のメッセージの本文）を一切入れない
+        （diagnostics.py の冒頭）。"""
+        d = diagnostics
+        cfg, s = self.cfg, self.session
+        yes = lambda flag: "はい" if flag else "いいえ"
+        lines = [f"{APP_NAME} 診断情報（{time.strftime('%Y-%m-%d %H:%M')}）",
+                 "※ 文章の中身、仮名化した語と記号、ファイルの名前、ファイルやフォルダの場所、利用者と PC の名前は"
+                 "入っていません。", ""]
+        lines += ["■ 環境"] + d.environment_lines(self, APP_NAME, VERSION_LABEL) + [""]
+        default_folder = Path(cfg.vamd_folder) == vamd.default_folder()
+        lines += ["■ この PC の設定",
+                  f"新しい文書の既定：{DOC_TYPES[cfg.doc_type].label}・ページ番号 {PAGE_NUMBER_LABELS[cfg.page_number]}・"
+                  f"行番号 {yes(cfg.line_numbers)}・番号1字 {yes(cfg.one_width)}",
+                  f"構文ファイルの保存場所：{'既定の場所' if default_folder else '変えた場所'}・"
+                  f"{d.folder_state(cfg.vamd_folder)}",
+                  f"PDF を保存したフォルダ（覚えている数）：{len(cfg.pdf_folders)}",
+                  f"エディター：書体 {cfg.editor_font_family or '既定'}・{cfg.editor_font_size}pt・"
+                  f"行の間隔 {cfg.editor_line_spacing_pt}pt",
+                  f"AI への指示：{'書き換えあり' if cfg.ai_prompt else '既定'}",
+                  f"ウィンドウ：{cfg.window_geometry or '設定なし'}・最大化 {yes(cfg.window_zoomed)}・"
+                  f"プレビューの幅 {cfg.preview_width}", ""]
+        text = self.raw_text()
+        try:
+            modified = s.is_modified(self.real_text())
+        except Exception as e:
+            modified = f"確かめられない（{type(e).__name__}）"
+        kinds = {}
+        for entry in s.dictionary.entries.values():
+            kinds[entry.kind] = kinds.get(entry.kind, 0) + 1
+        pages = len(self._page_tops) if self._preview_doc is not None else 0
+        lines += ["■ 今の文書",
+                  f"文書の種類：{s.doc_type.label}・ページ番号 {PAGE_NUMBER_LABELS[s.settings.page_number]}・"
+                  f"行番号 {yes(s.settings.line_numbers)}・番号1字 {yes(s.settings.one_width)}",
+                  f"保存：{f'版 {s.version}' if s.version else 'まだ'}・保存していない変更 "
+                  f"{modified if isinstance(modified, str) else yes(modified)}・"
+                  f"構文ファイル {'開いたファイル' if s.vamd_file else '決まったフォルダ'}",
+                  f"エディター：{len(text)} 字・{text.count(chr(10)) + 1 if text else 0} 行",
+                  "仮名化した語：" + (f"{len(s.dictionary.entries)} 語（"
+                                    + "・".join(f"{k} {n}" for k, n in sorted(kinds.items())) + "）"
+                                    if s.dictionary.entries else "なし"),
+                  f"画像：{len(s.images)} 枚・プレビュー：{pages} ページ・"
+                  f"組んだときの知らせ {'あり' if self._layout_warning else 'なし'}"]
+        records = self.errors.records
+        lines += ["", f"■ 起きた誤り（新しいものから {min(len(records), d.SHOW_ERRORS)} 件。覚えているのは全 {len(records)} 件）"]
+        if not records:
+            lines.append("なし")
+        for r in reversed(records[-d.SHOW_ERRORS:]):
+            lines += d.format_record(r)
+        return "\n".join(lines) + "\n"
 
     # ======================================================================
     # 入力欄
@@ -710,7 +823,13 @@ def main():
             except Exception:
                 pass
     path = sys.argv[1] if len(sys.argv) > 1 else None
-    MainWindow(open_path=path).mainloop()
+    try:
+        window = MainWindow(open_path=path)
+    except Exception as e:
+        # 起動できなかったことも覚える（次に起動できたときに、診断情報で渡せる）
+        diagnostics.ErrorLog().record(e, "起動")
+        raise
+    window.mainloop()
 
 
 if __name__ == "__main__":

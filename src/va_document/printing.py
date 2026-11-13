@@ -4,18 +4,19 @@ VA Document の「印刷」画面（dialogs.PrintDialog）でプリンター・�
 Windows 11 の新しい印刷画面は、プレビューの欄に「このアプリは印刷プレビューをサポートしていません」と出て紛らわしいため、
 Windows の PrintDlgW をやめた。プリンターの細かい設定は［プロパティ］で、プリンターのドライバーの画面を開く）、組んだページ
 （確認表示と同じもの）をプリンターの解像度（最大 PRINT_MAX_DPI）の画像にして、実際のサイズで送る。
-・字だけのページは灰色、画像のあるページはカラーにする（page_colorspace。2026-10-30 班長決定。それまではすべて灰色で、写真も
+・字だけのページは灰色、画像のあるページはカラーにする（page_is_color。2026-10-30 班長決定。それまではすべて灰色で、写真も
   白黒で刷られた）。カラーのページは、灰色の3倍の大きさになるので、上から BAND_ROWS 行ずつに分けて送る（1ページを丸ごと
   画像にすると、600 dpi で約 100 MB になるため）。印刷の画面の印刷プレビューも、同じ規則で色を決める。
 ・用紙は A4 にする（プリンターの既定が Letter などでも、字が切れないように）。
 ・印刷できない用紙の縁の分（PHYSICALOFFSET）を差し引き、用紙の左上にページの左上を合わせる。
 ・印刷の文書の名前（待ち行列に出る名前。Microsoft Print to PDF では PDF の題名になる）は、呼ぶ側が決める（画面では PDF のファイル名）。
-外の部品（pywin32）は使わず、ctypes で Windows の関数を呼ぶ。
+外の部品（pywin32）は使わず、ctypes で Windows の関数を呼ぶ。ページを画像にするのは pdfpages（pypdfium2。Ver300 で
+PyMuPDF から替えた）。
 """
 import ctypes
 import os
 
-import fitz  # PyMuPDF
+from .pdfpages import PdfPages
 
 PRINT_MAX_DPI = 600
 BAND_ROWS = 1024        # カラーのページを分けて送るときの、1回の行の数（600 dpi で約 15 MB）
@@ -178,13 +179,27 @@ def parse_pages(spec, total):
     return sorted(chosen)
 
 
-def page_colorspace(page):
-    """ページを印刷する色：画像のあるページはカラー、字だけのページは灰色（2026-10-30 班長決定）。蛍光ペンと仮名化する語の
-    色は、印刷する PDF にはもともと入らない（preview_pdf の既定）。"""
-    return fitz.csRGB if page.get_images() else fitz.csGRAY
+def page_is_color(doc, k):
+    """ページ k（doc は pdfpages.PdfPages）をカラーで印刷するか：画像のあるページはカラー、字だけのページは灰色
+    （2026-10-30 班長決定）。蛍光ペンと仮名化する語の色は、印刷する PDF にはもともと入らない（preview_pdf の既定）。"""
+    return doc.has_images(k)
 
 
-def _draw_color_page(hdc, page, render_dpi, dpi_x, dpi_y, off_x, off_y):
+def _stretch(hdc, pix, bmi, x, y, dest_w, dest_h):
+    """画像（pdfpages.Pixels。1行は 4 の倍数のバイト数で、DIB と同じ並び）を、プリンターの (x, y) に dest_w × dest_h で描く。"""
+    data, row = pix.data, pix.width * pix.n
+    stride = (row + 3) & ~3                             # DIB の1行のバイト数（4 の倍数）
+    if pix.stride != stride:                            # pdfium の画像の行の幅が違えば、詰め直す
+        pad = b"\xff" * (stride - row)
+        data = b"".join(data[r * pix.stride:r * pix.stride + row] + pad for r in range(pix.height))
+    bmi.bmiHeader.biWidth = pix.width
+    bmi.bmiHeader.biHeight = -pix.height                # 上から下へ並ぶ画像
+    buf = ctypes.create_string_buffer(data, len(data))
+    _gdi32.StretchDIBits(hdc, x, y, dest_w, dest_h, 0, 0, pix.width, pix.height,
+                         buf, ctypes.byref(bmi), DIB_RGB_COLORS, SRCCOPY)
+
+
+def _draw_color_page(hdc, doc, k, render_dpi, dpi_x, dpi_y, off_x, off_y):
     """カラーのページを、上から BAND_ROWS 行ずつ画像にしてプリンターに描く（1ページを丸ごと画像にしないため）。
     帯の位置は、帯の画像の位置（画素）から毎回計算する（丸めの差で、帯の間がすいたり重なったりしないように）。"""
     zoom = render_dpi / 72
@@ -192,26 +207,14 @@ def _draw_color_page(hdc, page, render_dpi, dpi_x, dpi_y, off_x, off_y):
     bmi = BITMAPINFO_RGB()
     bmi.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
     bmi.bmiHeader.biPlanes, bmi.bmiHeader.biBitCount = 1, 24
-    rect = page.rect
-    rows = round(rect.height * zoom)
+    rows = round(doc.size(k)[1] * zoom)
     for r0 in range(0, rows, BAND_ROWS):
         r1 = min(r0 + BAND_ROWS, rows)
-        clip = fitz.Rect(rect.x0, rect.y0 + r0 / zoom, rect.x1, rect.y0 + r1 / zoom)
-        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip, colorspace=fitz.csRGB, alpha=False)
-        data = bytearray(pix.samples)
-        data[0::3], data[2::3] = data[2::3], data[0::3]     # Windows の画像は、青・緑・赤の順
-        row = pix.width * 3
-        stride = (row + 3) & ~3                              # 1行のバイト数は 4 の倍数にする
-        if stride != row:
-            pad = b"\xff" * (stride - row)
-            data = b"".join(bytes(data[r * row:(r + 1) * row]) + pad for r in range(pix.height))
-        bmi.bmiHeader.biWidth = pix.width
-        bmi.bmiHeader.biHeight = -pix.height                # 上から下へ並ぶ画像
-        x0, y0 = round(pix.x * sx), round(pix.y * sy)
-        dest_w, dest_h = round((pix.x + pix.width) * sx) - x0, round((pix.y + pix.height) * sy) - y0
-        buf = ctypes.create_string_buffer(bytes(data), len(data))
-        _gdi32.StretchDIBits(hdc, x0 - off_x, y0 - off_y, dest_w, dest_h, 0, 0, pix.width, pix.height,
-                             buf, ctypes.byref(bmi), DIB_RGB_COLORS, SRCCOPY)
+        # 青・緑・赤の順（Windows の画像と同じ）で、1行は 4 の倍数のバイト数（pdfium の画像のまま渡せる）
+        pix = doc.render(k, zoom, top=r0 / zoom, bottom=r1 / zoom, bgr=True)
+        y0 = round(r0 * sy)
+        dest_w, dest_h = round(pix.width * sx), round((r0 + pix.height) * sy) - y0
+        _stretch(hdc, pix, bmi, -off_x, y0 - off_y, dest_w, dest_h)
 
 
 def print_pdf(pdf_bytes, hdc, doc_name, pages=None, output=None, progress=None):
@@ -240,36 +243,27 @@ def print_pdf(pdf_bytes, hdc, doc_name, pages=None, output=None, progress=None):
         for k in range(256):
             bmi.bmiColors[k] = k | (k << 8) | (k << 16)
         done = 0
-        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+        with PdfPages(pdf_bytes) as doc:
             chosen = list(range(len(doc))) if pages is None else pages
             try:
                 for k in chosen:
-                    page = doc[k]
-                    if page_colorspace(page) is fitz.csRGB:
+                    if page_is_color(doc, k):
                         if _gdi32.StartPage(hdc) <= 0:
                             raise PrintError("ページを始められませんでした。")
-                        _draw_color_page(hdc, page, render_dpi, dpi_x, dpi_y, off_x, off_y)
+                        _draw_color_page(hdc, doc, k, render_dpi, dpi_x, dpi_y, off_x, off_y)
                         if _gdi32.EndPage(hdc) <= 0:
                             raise PrintError("ページを送れませんでした。")
                         done += 1
                         if progress:
                             progress(done, len(chosen))
                         continue
-                    pix = page.get_pixmap(dpi=render_dpi, colorspace=fitz.csGRAY, alpha=False)
-                    stride = (pix.width + 3) & ~3          # 1行のバイト数は 4 の倍数にする
-                    data = pix.samples
-                    if stride != pix.width:
-                        pad = b"\xff" * (stride - pix.width)
-                        data = b"".join(data[r * pix.width:(r + 1) * pix.width] + pad for r in range(pix.height))
-                    bmi.bmiHeader.biWidth = pix.width
-                    bmi.bmiHeader.biHeight = -pix.height    # 上から下へ並ぶ画像
-                    dest_w = round(page.rect.width / 72 * dpi_x)
-                    dest_h = round(page.rect.height / 72 * dpi_y)
+                    pix = doc.render(k, render_dpi / 72, gray=True)
+                    page_w, page_h = doc.size(k)
+                    dest_w = round(page_w / 72 * dpi_x)
+                    dest_h = round(page_h / 72 * dpi_y)
                     if _gdi32.StartPage(hdc) <= 0:
                         raise PrintError("ページを始められませんでした。")
-                    buf = ctypes.create_string_buffer(data, len(data))
-                    _gdi32.StretchDIBits(hdc, -off_x, -off_y, dest_w, dest_h, 0, 0, pix.width, pix.height,
-                                         buf, ctypes.byref(bmi), DIB_RGB_COLORS, SRCCOPY)
+                    _stretch(hdc, pix, bmi, -off_x, -off_y, dest_w, dest_h)
                     if _gdi32.EndPage(hdc) <= 0:
                         raise PrintError("ページを送れませんでした。")
                     done += 1

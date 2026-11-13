@@ -2,28 +2,35 @@
 BAND_ROWS 行ずつに分けて送り、帯の間がすかないこと。Microsoft Print to PDF に印刷して確かめる（Windows だけ）。"""
 import time
 
-import fitz
 import pytest
+from PIL import Image
 
+import pdfcheck
 from va_document import printing
+from va_document.pdfpages import PdfPages
+
+H = 841.9
 
 
 def color_pdf():
-    """1ページ目は字だけ、2ページ目は字と、帯の切れ目をまたぐ高さのカラーの画像。"""
-    doc = fitz.open()
-    for k in range(2):
-        page = doc.new_page(width=595.3, height=841.9)
-        page.insert_text((72, 72), f"page {k + 1}", fontsize=12)
-    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 40, 200), False)
-    pix.set_rect(pix.irect, (220, 40, 40))
-    doc[1].insert_image(fitz.Rect(100, 100, 300, 700), pixmap=pix)
-    return doc.tobytes()
+    """1ページ目は字だけ、2ページ目は字と、帯の切れ目をまたぐ高さのカラーの画像（用紙の上から 100〜700pt）。"""
+    from reportlab.lib.utils import ImageReader
+    red = ImageReader(Image.new("RGB", (40, 200), (220, 40, 40)))
+
+    def page(k, image=False):
+        def draw(c):
+            c.setFont("Helvetica", 12)
+            c.drawString(72, H - 72, f"page {k}")
+            if image:
+                c.drawImage(red, 100, H - 700, width=200, height=600)
+        return draw
+    return pdfcheck.make_pdf(page(1), page(2, image=True), size=(595.3, H))
 
 
-def test_page_colorspace():
-    with fitz.open(stream=color_pdf(), filetype="pdf") as doc:
-        assert printing.page_colorspace(doc[0]) is fitz.csGRAY
-        assert printing.page_colorspace(doc[1]) is fitz.csRGB
+def test_page_is_color():
+    with PdfPages(color_pdf()) as doc:
+        assert not printing.page_is_color(doc, 0)
+        assert printing.page_is_color(doc, 1)
 
 
 @pytest.fixture
@@ -49,23 +56,21 @@ def test_color_page_is_printed_in_color_without_gaps(tmp_path, quiet_faulthandle
             break
         time.sleep(0.2)
     time.sleep(0.5)
-    with fitz.open(out) as doc:
-        assert len(doc) == 2
-        gray = doc[0].get_pixmap(dpi=72)
-        assert gray.n == 3 or gray.n == 1
-        assert all(len(set(gray.pixel(x, y)[:3])) == 1 for x in range(0, gray.width, 7) for y in range(0, gray.height, 7))
-        # 2ページ目の画像は赤いまま。画像の上から下まで（帯の切れ目をまたいで）、白い行がない
-        pix = doc[1].get_pixmap(dpi=150)
-        z = 150 / 72
-        x = round(200 * z)
-        reds = [pix.pixel(x, y)[:3] for y in range(round(105 * z), round(695 * z))]
-        assert all(r > 150 and g < 120 and b < 120 for r, g, b in reds), [c for c in reds if c[0] <= 150 or c[1] >= 120][:3]
-        # 送った解像度（600 dpi）でも、帯の切れ目（BAND_ROWS 行ごと）の前後に、白い行がない
-        fine = doc[1].get_pixmap(dpi=600, clip=fitz.Rect(195, 100, 205, 700))
-        z = 600 / 72
-        cut_rows = [r - round(100 * z) for r in range(printing.BAND_ROWS, round(700 * z), printing.BAND_ROWS)]
-        assert cut_rows
-        for r in cut_rows:
-            for y in range(max(0, r - 3), min(fine.height, r + 3)):
-                cr, cg, cb = fine.pixel(fine.width // 2, y)[:3]
-                assert cr > 150 and cg < 120, (r, y, (cr, cg, cb))
+    assert pdfcheck.page_count(out) == 2
+    gray = pdfcheck.render(out, 0, dpi=72).convert("RGB")
+    assert all(len(set(gray.getpixel((x, y)))) == 1 for x in range(0, gray.width, 7) for y in range(0, gray.height, 7))
+    # 2ページ目の画像は赤いまま。画像の上から下まで（帯の切れ目をまたいで）、白い行がない
+    pix = pdfcheck.render(out, 1, dpi=150).convert("RGB")
+    z = 150 / 72
+    x = round(200 * z)
+    reds = [pix.getpixel((x, y)) for y in range(round(105 * z), round(695 * z))]
+    assert all(r > 150 and g < 120 and b < 120 for r, g, b in reds), [c for c in reds if c[0] <= 150 or c[1] >= 120][:3]
+    # 送った解像度（600 dpi）でも、帯の切れ目（BAND_ROWS 行ごと）の前後に、白い行がない
+    z = 600 / 72
+    fine = pdfcheck.render(out, 1, dpi=600).convert("RGB")
+    cut_rows = [r for r in range(printing.BAND_ROWS, round(700 * z), printing.BAND_ROWS) if r > round(100 * z)]
+    assert cut_rows
+    for r in cut_rows:
+        for y in range(max(0, r - 3), min(fine.height, r + 3)):
+            cr, cg, cb = fine.getpixel((round(200 * z), y))
+            assert cr > 150 and cg < 120, (r, y, (cr, cg, cb))

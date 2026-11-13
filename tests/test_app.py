@@ -10,7 +10,7 @@ tk = pytest.importorskip("tkinter")
 
 from tkinter import messagebox  # noqa: E402
 
-from va_document import ai_ops, app, config, editor_mark, file_ops, preview, theme, vamd  # noqa: E402
+from va_document import ai_ops, app, config, diagnostics, editor_mark, file_ops, preview, theme, vamd  # noqa: E402
 from va_document.document import (BULLET_MARK, CENTER_MARK, HEADING_BUTTON_MARK, PAGE_BREAK_MARK,  # noqa: E402
                                   RIGHT_MARK)
 from va_document.pdfwriter import read_id  # noqa: E402
@@ -21,13 +21,15 @@ PSEUDO = TEXT.replace("甲野太郎", "〔人名Ａ〕")      # エディター�
 
 
 @pytest.fixture(scope="module")
-def main_window():
+def main_window(tmp_path_factory):
     # Tk はモジュールで1つだけ作る（Windows の Python では、Tk を何度も作り直すと、まれに初期化に失敗する）
     try:
         w = app.MainWindow(cfg=config.AppConfig(vamd_folder="未使用"))
     except tk.TclError as e:
         pytest.skip(f"画面を表示できない環境（{e}）")
     w.withdraw()
+    # 誤りの記録も、班長の %APPDATA% には書かない
+    w.errors = diagnostics.ErrorLog(tmp_path_factory.mktemp("errors") / "errors.json")
     yield w
     w.destroy()
 
@@ -37,6 +39,7 @@ def window(main_window, tmp_path, monkeypatch):
     # 班長の設定ファイル（%APPDATA%）には書かない
     monkeypatch.setattr(config, "config_path", lambda: tmp_path / "settings.json")
     w = main_window
+    w.errors = diagnostics.ErrorLog(tmp_path / "errors.json")
     w.cfg = config.AppConfig(vamd_folder=str(tmp_path / "構文ファイル"))
     w.session = app.Session(w.cfg)
     w._load_text(TEXT)
@@ -88,7 +91,7 @@ def test_preview_scrolls_across_pages(window):
     window._render_visible()
     assert window.page_label.cget("text") == f"{n - 1} / {n}"
     # ページはいつも欄の幅に合わせる（横のスクロールバーはない）
-    assert window._page_size[0] == round(window._preview_doc[0].rect.width * window._fit_zoom())
+    assert window._page_size[0] == round(window._preview_doc.size(0)[0] * window._fit_zoom())
     assert not [c for c in _widgets(window._preview_pane, tk.ttk.Scrollbar) if str(c.cget("orient")) == "horizontal"]
     window.withdraw()
 
@@ -562,8 +565,9 @@ def test_ribbon_groups_and_reflow(window):
 
 def test_ribbon_grows_open_save_heading_when_room(window):
     """［開く］［保存］［見出し］は、リボンが1段に入りきる幅があれば大きいボタンにし、狭くなったら、組を折り返す前に
-    小さくする（2026-10-30 班長指示）。下に残った［閉じる］は、右の列の［オプション］の上に積む。［見出し］の下に残った
-    ［箇条書き］［段落番号］は右の列に入らないので2つで1列にし、［太字］などの列は変えない。"""
+    小さくする（2026-10-30 班長指示）。下に残った［閉じる］は、1つで1列にする（右の列の［オプション］は、2026-11-14 の班長指示で
+    メニューバーの「ファイル」に移した）。［見出し］の下に残った［箇条書き］［段落番号］は右の列に入らないので2つで1列にし、
+    ［太字］などの列は変えない。"""
     rb = window.ribbon
     found = {str(b.cget("text")): b for b in _all_buttons(rb)}
     grown = [found[t] for t in ("開く", "保存", "見出し", "表", "画像")]     # ［表］［画像］は 2026-11-03 班長指示
@@ -580,14 +584,15 @@ def test_ribbon_grows_open_save_heading_when_room(window):
     # 大きいアイコンは、面を色分けした自作のアイコン（<名前>_large.svg。2026-10-30 班長決定）
     from va_document import icons
     for name in ("folder_open", "save", "text_header_2", "person_lock", "table", "image"):
-        assert icons.render_large_png(name, 32), name
+        assert icons.icon_png(name, 32, large=True), name
     assert str(window.register_button.cget("image")[0]) == str(
         window.icons.image("person_lock", size=round(32 * window.icons.scale), large=True))
     assert str(found["閉じる"].cget("style")) == "Ribbon.TButton"
     cells = {t: (int(found[t].grid_info()["column"]), int(found[t].grid_info()["row"]))
-             for t in ("開く", "保存", "閉じる", "オプション", "見出し", "箇条書き", "段落番号", "太字", "均等割付")}
-    assert cells == {"開く": (0, 0), "保存": (1, 0), "閉じる": (2, 0), "オプション": (2, 1),
+             for t in ("開く", "保存", "閉じる", "見出し", "箇条書き", "段落番号", "太字", "均等割付")}
+    assert cells == {"開く": (0, 0), "保存": (1, 0), "閉じる": (2, 0),
                      "見出し": (0, 0), "箇条書き": (1, 0), "段落番号": (1, 1), "太字": (2, 0), "均等割付": (2, 2)}
+    assert "オプション" not in found                      # リボンには置かない（メニューバーの「ファイル」。2026-11-14）
     # 大きくすると入らないが、小さければ入る幅では、小さくして1段のまま（折り返さない）
     rb.reflow(large - 10)
     assert not rb.expanded and len(rb._layout) == 1
@@ -596,7 +601,6 @@ def test_ribbon_grows_open_save_heading_when_room(window):
         assert int(b.grid_info()["rowspan"]) == 1
         assert str(b.cget("image")) != big_images[str(b.cget("text"))]     # 小さいアイコンに戻す
     assert int(found["閉じる"].grid_info()["column"]) == 0 and int(found["閉じる"].grid_info()["row"]) == 2
-    assert int(found["オプション"].grid_info()["column"]) == 1 and int(found["オプション"].grid_info()["row"]) == 0
     # 小さくしても入らなければ折り返す（ボタンは小さいまま）
     rb.reflow(small - 10)
     assert not rb.expanded and len(rb._layout) == 2
@@ -808,9 +812,8 @@ def test_save_guard_for_tokens_and_separator(window, tmp_path, monkeypatch):
     # 仮名化した語の記号は、実名に戻して保存する（PDF に記号は出ない）
     window._load_text(TEXT + "〔人名Ａ〕の陳述書による。\n")
     assert window.on_save()
-    import fitz
-    with fitz.open(tmp_path / "準備書面.pdf") as doc:
-        pdf_text = "".join(page.get_text() for page in doc)
+    import pdfcheck
+    pdf_text = pdfcheck.text(tmp_path / "準備書面.pdf")
     assert "〔" not in pdf_text and "甲野太郎の陳述書" in pdf_text
     # 仮名化した語にない記号（AI が作った記号など）は、PDF に記号のまま出ることを知らせて尋ねる
     asked = []
@@ -835,7 +838,7 @@ def quiet_faulthandler():
 @pytest.mark.skipif(app.os.name != "nt", reason="印刷は Windows だけ")
 def test_print_to_pdf_printer(window, tmp_path, monkeypatch, quiet_faulthandler):
     """［印刷］：Microsoft Print to PDF に印刷し、実際のサイズ（A4）で、字の位置がずれないことを確かめる。"""
-    import fitz
+    import pdfcheck
     from va_document import printing
     if "Microsoft Print to PDF" not in printing.printers():
         pytest.skip("Microsoft Print to PDF がない")
@@ -845,8 +848,7 @@ def test_print_to_pdf_printer(window, tmp_path, monkeypatch, quiet_faulthandler)
 
     class Choose:
         def __init__(self, parent, data, names, default, show_properties):
-            with fitz.open(stream=data, filetype="pdf") as doc:
-                pages = len(doc)
+            pages = pdfcheck.page_count(data)
             chosen.append((pages, default))
             self.result = ("Microsoft Print to PDF", None, 1, list(range(pages)))
     monkeypatch.setattr(file_ops, "PrintDialog", Choose)
@@ -876,8 +878,8 @@ def test_print_to_pdf_printer(window, tmp_path, monkeypatch, quiet_faulthandler)
         if out.exists() and out.stat().st_size:
             break
         time.sleep(0.2)
-    with fitz.open(out) as doc:
-        assert len(doc) >= 1 and abs(doc[0].rect.width - 595.3) < 1 and abs(doc[0].rect.height - 841.9) < 1
+    w, h = pdfcheck.page_size(out)
+    assert pdfcheck.page_count(out) >= 1 and abs(w - 595.3) < 1 and abs(h - 841.9) < 1
     assert not errors and "1 ページをプリンターに送りました" in window.status.cget("text")
     assert chosen[1][1] == "Microsoft Print to PDF"            # 前に使ったプリンターを選んでおく
 
@@ -1085,7 +1087,7 @@ def test_buttons_have_icons(window):
         # メインの画面のボタンだけ（検索と置換などの別の画面〔Toplevel〕は見ない）
         return _widgets(w, ttk.Button, skip_toplevel=True)
     found = {str(b.cget("text")).replace("\n", ""): b for b in buttons(window)}
-    for text in ("開く", "保存", "印刷", "閉じる", "オプション", "選択範囲を仮名化", "コピー", "貼り付け", "表題", "中央", "右", "インデント", "太字", "均等割付",
+    for text in ("開く", "保存", "印刷", "閉じる", "選択範囲を仮名化", "コピー", "貼り付け", "表題", "中央", "右", "インデント", "太字", "均等割付",
                  "見出し", "箇条書き", "段落番号", "改ページ", "セクション区切り", "ヘッダー", "検索", "置換", "蛍光ペン", "パスをコピー"):
         assert found[text].cget("image"), text
         # リボンの大きいボタン（［選択範囲を仮名化］と、幅があるときの［開く］［保存］［見出し］）はアイコンの下に字、
@@ -1098,14 +1100,13 @@ def test_buttons_have_icons(window):
     for name in icons.BUTTON_ICONS.values():
         assert (icons.ICON_DIR / f"{name}.svg").exists(), name
     assert "MIT License" in (icons.ICON_DIR / "LICENSE").read_text(encoding="utf-8")
-    assert icons.render_png("save", 24, theme.TEXT)[:4] == b"\x89PNG"
+    assert icons.icon_png("save", 24)[:4] == b"\x89PNG"
     # Office の色付きアイコンのように2色（塗りつぶし版を薄い青で下に敷く。2026-10-24 班長指示）
     for name in icons.BUTTON_ICONS.values():
         assert (icons.ICON_DIR / f"{name}_filled.svg").exists(), name
-    import fitz
-    pix = fitz.Pixmap(icons.render_png("save", 32, theme.TEXT, theme.ICON_TINT))
+    pix = icons.icon_image("save", 32)
     tint = tuple(int(theme.ICON_TINT[k:k + 2], 16) for k in (1, 3, 5))
-    colors = {pix.pixel(x, y)[:3] for x in range(pix.width) for y in range(pix.height) if pix.pixel(x, y)[3] == 255}
+    colors = {pix.getpixel((x, y))[:3] for x in range(pix.width) for y in range(pix.height) if pix.getpixel((x, y))[3] == 255}
     assert tint in colors and tuple(int(theme.TEXT[k:k + 2], 16) for k in (1, 3, 5)) in colors
 
 
@@ -2359,7 +2360,8 @@ def test_insert_table(window):
     window.text.insert("insert", "項目")
     window.refresh()
     assert any(p.kind == TABLE for p in window.session.layout_map.paras)
-    assert "項目" in "".join(p.get_text() for p in window._preview_doc)
+    import pdfcheck
+    assert "項目" in pdfcheck.text(window.session.preview_pdf(window.real_text(), highlight=True))
     window.text.edit_undo()
     window.text.edit_undo()
     assert window.raw_text() == PSEUDO
@@ -2787,14 +2789,14 @@ def test_image_preview_links_to_editor(window):
     line = len(window.raw_text().split("\n")) - 2
     assert m.hit(piece.page - 1, m.ts.margin_left + piece.x + piece.w / 2, piece.y + piece.h / 2) == (line, 4)
     assert m.locate(line, 4) == (piece.page - 1, m.ts.margin_left + piece.x, piece.y, piece.h)
-    assert window._preview_doc[0].get_images()
+    assert window._preview_doc.has_images(0)
     # ［右］で右に置き、もう一度押すと標準に戻す（配置のボタンは画像の行にも効く）
     window.text.mark_set("insert", f"{line + 1}.0")
     window.on_align(RIGHT_MARK)
     assert window.text.get(f"{line + 1}.0", f"{line + 1}.end") == f"--: [IMAGE {n}]{{20}}"
     window.refresh()
     im = window.session.layout_map.ts.images[0]
-    assert im.wrap and window._preview_doc[0].get_images()          # 回り込ませる画像は、後に本文がなくても描く
+    assert im.wrap and window._preview_doc.has_images(0)          # 回り込ませる画像は、後に本文がなくても描く
 
 
 # ---------- ［ファイルから読み込む］（2026-10-29 班長決定） ----------
@@ -2877,3 +2879,78 @@ def test_load_entries_asks_for_missing_pdf(window, tmp_path, monkeypatch):
     window.on_load_entries()
     assert asked and "PDF を選びますか" in asked[0] and picked == ["仮名化する語を読み込むファイル", "PDF を選ぶ"]
     assert window.session.dictionary.find("〔法人Ｘ〕").word == "乙山商事株式会社"
+
+
+# ---------- ヘルプ・診断情報（2026-11-10 班長決定） ----------
+
+def test_help_menu(window, monkeypatch):
+    """メニューバーは「ファイル」と「ヘルプ」。「ファイル」に［開く…］［保存］［閉じる］と、一番下に［オプション…］
+    （［オプション］はリボンには置かない。［印刷］は置かない。2026-11-14 班長指示）、「ヘルプ」に［診断情報をコピー］と
+    ［VA Document について］がある。"""
+    def commands(menu):
+        return [menu.entrycget(i, "label") for i in range(menu.index("end") + 1) if menu.type(i) == "command"]
+    assert [window.menu_bar.entrycget(i, "label") for i in range(window.menu_bar.index("end") + 1)
+            if window.menu_bar.type(i) == "cascade"] == ["ファイル", "ヘルプ"]
+    f = window.file_menu
+    assert [f.type(i) if f.type(i) == "separator" else f.entrycget(i, "label") for i in range(f.index("end") + 1)] == \
+        ["開く…", "保存", "閉じる", "separator", "オプション…"]
+    assert [f.entrycget(i, "accelerator") for i in range(3)] == ["Ctrl+O", "Ctrl+S", ""]
+    # どの項目も、リボンのボタンと同じ操作を呼ぶ
+    called = []
+    for name in ("on_open", "on_save", "on_print", "on_options", "on_close_document"):
+        monkeypatch.setattr(window, name, lambda n=name: called.append(n))
+    for i in range(f.index("end") + 1):
+        if f.type(i) == "command":
+            f.invoke(i)
+    assert called == ["on_open", "on_save", "on_close_document", "on_options"]
+    assert commands(window.help_menu) == ["診断情報をコピー", "VA Document について"]
+    assert window.menu_bar.entrycget(window.menu_bar.index("end"), "label") == "ヘルプ"
+    # メニューバーは、ウィンドウを表示してから付ける（_build_menu。前の大きさ・位置に戻すのは test_window_position_is_restored）
+    window.update_idletasks()
+    assert str(window.cget("menu")) == str(window.menu_bar)
+    # 「について」は VA Case・VA FAX と同じ形（名前と版・1行の説明・空の行・作った者・ライセンス。2026-11-14 班長指示）
+    assert window.about_text().split("\n") == [f"VA Document  {app.VERSION_LABEL}", window.ABOUT_LINE, "",
+                                               "VBAアセット（vba-assets.net）", "MIT License"]
+
+
+def test_diagnostic_text_has_no_contents(window, tmp_path, monkeypatch):
+    """診断情報に、文章・仮名化した語と記号・ファイルの名前・フォルダの場所・例外のメッセージの本文が入らない。"""
+    pdf = _first_document(window, tmp_path)                 # 「訴状.pdf」として保存した文書（仮名化した語あり）
+    secret = tmp_path / "甲野太郎の事件"
+    secret.mkdir()
+    window.cfg.vamd_folder = str(secret)
+    window.cfg.pdf_folders = [str(secret), str(pdf.parent)]
+    try:
+        raise OSError(13, "アクセスが拒否されました", str(secret / "準備書面.pdf"))
+    except OSError as e:
+        window.errors.record(e, "保存")
+    text = window.diagnostic_text()
+    assert app.VERSION_LABEL in text and "PermissionError" in text and "処理：保存" in text
+    assert "構文ファイルの保存場所：変えた場所・設定あり（フォルダがある）" in text
+    assert "PDF を保存したフォルダ（覚えている数）：2" in text
+    assert "仮名化した語：1 語（人名 1）" in text and "保存：まだ" in text
+    assert f"エディター：{len(PSEUDO)} 字" in text
+    for word in ("甲野", "乙山", "〔人名", "〔法人", "訴状", "準備書面", "認否", "アクセスが拒否", str(tmp_path), "AppData"):
+        assert word not in text, word
+    shown = []
+    monkeypatch.setattr(messagebox, "showinfo", lambda *a, **k: shown.append(a[1]))
+    window.on_copy_diagnostics()
+    assert window.clipboard_get() == text
+    assert shown and "診断情報をコピーしました" in shown[0]
+    window.clipboard_clear()
+
+
+def test_errors_are_recorded(window, tmp_path, monkeypatch):
+    """開けなかったファイル・画面の処理の予期しない誤りを、型と場所だけで覚える。"""
+    monkeypatch.setattr(messagebox, "showerror", lambda *a, **k: None)
+    window.open_path(tmp_path / "甲野太郎" / "ない.txt")
+    last = window.errors.records[-1]
+    assert last["stage"] == "開く" and last["type"] == "FileNotFoundError"
+    assert "甲野" not in json.dumps(window.errors.records, ensure_ascii=False)
+    monkeypatch.setattr("sys.stderr", open(tmp_path / "stderr.txt", "w", encoding="utf-8"))   # Tk の既定の出力
+    try:
+        raise KeyError("甲野太郎")
+    except KeyError as e:
+        window.report_callback_exception(type(e), e, e.__traceback__)
+    assert window.errors.records[-1]["stage"] == "画面の処理" and window.errors.records[-1]["type"] == "KeyError"
+    assert "甲野" not in window.diagnostic_text()

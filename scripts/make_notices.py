@@ -1,6 +1,7 @@
 """VA Document が使っている部品のライセンスの表示（THIRD_PARTY_NOTICES.txt）を作る。
 
-exe に入る部品（Python・Tcl/Tk・PyMuPDF・ReportLab・fontTools・Pillow・tkinterdnd2・tkdnd・PyInstaller のブートローダー）と、
+exe に入る部品（Python・Tcl/Tk・ReportLab・pypdf・pdfplumber・pdfminer.six・pypdfium2〔PDFium〕・fontTools・Pillow・
+tkinterdnd2・tkdnd・PyInstaller のブートローダーと、それらが使う部品）と、
 ボタンのアイコン（Fluent UI System Icons）のライセンスの全文を、いま入っている部品のファイルから集める。
 部品の版を上げたら、作り直してコミットする。
 
@@ -24,9 +25,25 @@ TKDND_TCL = Path(metadata.distribution("tkinterdnd2").locate_file("tkinterdnd2/t
 COMPONENTS = [
     ("Python", None, "プログラムの言語（exe に入る）", "PSF License Version 2", [PY_HOME / "LICENSE.txt"]),
     ("Tcl/Tk", None, "画面", "Tcl/Tk License（BSD 形式）", [PY_HOME / "tcl" / "tk8.6" / "license.terms"]),
-    ("PyMuPDF", "pymupdf", "PDF の表示・印刷・読み書き", "GNU Affero General Public License 第3版（AGPL-3.0）",
-     []),
-    ("ReportLab", "reportlab", "PDF の作成", "BSD License", ["licenses/LICENSE"]),
+    ("ReportLab", "reportlab", "PDF の作成（字・罫線を描く）", "BSD License", ["licenses/LICENSE"]),
+    ("pypdf", "pypdf", "PDF の仕上げ（画像・識別子・文書情報）と、識別子・画像の読み出し", "BSD License（3条項）",
+     ["licenses/LICENSE"]),
+    ("pdfplumber", "pdfplumber", "PDF の字の読み取り（開き直したときの対応表の作り直し、ほかのソフトで作った PDF の取り込み）",
+     "MIT License", ["licenses/LICENSE.txt"]),
+    ("pdfminer.six", "pdfminer.six", "PDF の字の読み取り（pdfplumber が使う）", "MIT License", ["licenses/LICENSE"]),
+    ("charset-normalizer", "charset-normalizer", "文字コードの判定（pdfminer.six が使う）", "MIT License", ["licenses/LICENSE"]),
+    ("cryptography", "cryptography", "暗号化された PDF を読む（pdfminer.six が使う）",
+     "Apache License 2.0 または BSD License（3条項）。どちらかを選べる", ["licenses/LICENSE", "licenses/LICENSE.APACHE",
+                                                                 "licenses/LICENSE.BSD"]),
+    ("cffi", "cffi", "cryptography が使う", "MIT License", ["licenses/LICENSE"]),
+    ("pycparser", "pycparser", "cffi が使う", "BSD License（3条項）", ["licenses/LICENSE"]),
+    ("pypdfium2", "pypdfium2", "プレビュー・印刷（PDF のページを画像にする）。Google の PDFium と、PDFium が使う部品を含む",
+     "Apache License 2.0・BSD License（3条項）。PDFium と、PDFium が使う部品のライセンスも写す",
+     ["licenses/LICENSES/Apache-2.0.txt", "licenses/LICENSES/BSD-3-Clause.txt"] + [
+         f"licenses/data/windows_x64/BUILD_LICENSES/{n}" for n in (
+             "pdfium.txt", "pdfium-binaries.txt", "abseil.txt", "agg23.txt", "fast_float.txt", "freetype.txt", "icu.txt",
+             "lcms.txt", "libjpeg_turbo.ijg", "libjpeg_turbo.md", "libopenjpeg.txt", "libpng.txt", "libtiff.txt",
+             "llvm-libc.txt", "simdutf.txt", "zlib.txt")]),
     ("fontTools", "fonttools", "書体の埋め込みの許可の確かめ", "MIT License",
      ["licenses/LICENSE", "licenses/LICENSE.external"]),
     ("Pillow", "pillow", "アイコンの画像", "MIT-CMU License", ["licenses/LICENSE"]),
@@ -70,7 +87,7 @@ def build() -> Path:
     parts = [
         "VA Document が使っている部品のライセンスの表示",
         "",
-        "VA Document そのものは、GNU Affero General Public License 第3版（AGPL-3.0）で公開しています（LICENSE）。",
+        "VA Document そのものは、MIT License で公開しています（LICENSE）。",
         "VA Document の実行ファイル（VA_Document.exe）には、次の部品が入っています（IPAフォントは、ソースにだけ入っています）。",
         "ＭＳ 明朝・ＭＳ ゴシックは入っていません（Windows に入っているものを、埋め込みの許可の範囲で PDF に埋め込みます）。",
         "",
@@ -78,10 +95,6 @@ def build() -> Path:
     for name, dist, use, lic, files in COMPONENTS:
         version = sys.version.split()[0] if name == "Python" else (metadata.version(dist) if dist else "")
         parts += ["=" * 78, f"{name} {version}".rstrip(), f"用途：{use}", f"ライセンス：{lic}"]
-        if name == "PyMuPDF":
-            parts.append("ライセンスの全文は、VA Document の LICENSE（AGPL-3.0）と同じです。"
-                         "PyMuPDF の表示：" + (Path(metadata.distribution(dist).locate_file(
-                             f"{dist}-{version}.dist-info/COPYING")).read_text(encoding="utf-8").strip()))
         parts.append("=" * 78)
         for fname, text in _license_files(dist, files):
             parts += [f"--- {fname} ---", text.rstrip(), ""]

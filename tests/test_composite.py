@@ -68,17 +68,14 @@ def test_one_width_composite_squeezed():
 
 def test_squeezed_number_in_pdf(tmp_path):
     """縮めた括弧の番号は、PDF でも横の倍率を掛けて描き、字は並びのまま残る（突き合わせで読める）。"""
-    import fitz
+    import pdfcheck
     from va_document.pdfwriter import write_pdf
     ts, paras, by = lines_by_para(["###", "#### 見出し"], doc_type_for("Saiban", True))
     lines = [ln for k in sorted(by) for ln in by[k]]
     out = tmp_path / "a.pdf"
     write_pdf(ts, lines, str(out))
-    text = fitz.open(str(out))[0].get_text()
-    assert "(1)ア　見出し" in text
-    page = fitz.open(str(out))[0]
-    widths = [c["bbox"][2] - c["bbox"][0] for b in page.get_text("rawdict")["blocks"] for l in b.get("lines", [])
-              for sp in l["spans"] for c in sp["chars"]]
+    assert "(1)ア　見出し" in pdfcheck.text(out, 0)
+    widths = [round(c["width"], 3) for c in pdfcheck.chars(out)]
     assert widths[:4] == [3, 6, 3, 12]                                  # 縮めるのは括弧だけ（後の字に倍率を残さない）
 
 

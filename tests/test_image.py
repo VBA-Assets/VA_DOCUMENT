@@ -2,9 +2,10 @@
 AI の回答の確かめ。画面の操作（［画像］・Ctrl+V）は test_app.py。"""
 import io
 
-import fitz  # PyMuPDF
 import pytest
 from PIL import Image, PngImagePlugin
+
+import pdfcheck
 
 from va_document import config, images, naiyou, vamd
 from va_document.doctypes import DEFAULT_DOC_TYPE, DOC_TYPES, NAIYOU
@@ -148,9 +149,8 @@ def test_missing_image_is_a_frame_without_text():
     ts, lines, paras = typeset(["[IMAGE 7]{20}", "本文。"], {})
     assert ts.images[0].missing and ts.images[0].h == pytest.approx(ts.images[0].w * 0.75)
     data = pdf_bytes(ts, lines, highlight=True)
-    with fitz.open(stream=data, filetype="pdf") as doc:
-        assert doc[0].get_text().split() == ["本文。", "1"]               # 本文とページ番号だけ
-        assert not doc[0].get_images() and doc[0].get_drawings()       # 枠は線で描き、字は描かない
+    assert pdfcheck.lines(data, 0) == ["本文。", "1"]                     # 本文とページ番号だけ
+    assert not pdfcheck.images(data, 0) and pdfcheck.drawings(data, 0)  # 枠は線で描き、字は描かない
 
 
 def test_right_image_wraps_following_text():
@@ -218,11 +218,11 @@ def test_pdf_images_round_trip_with_numbers(tmp_path):
     for n, pic in ((1, blue), (2, red), (3, blue)):
         assert Image.open(io.BytesIO(got[n].data)).convert("RGB").tobytes() == \
                Image.open(io.BytesIO(pic.data)).convert("RGB").tobytes()
-    with fitz.open(str(path)) as doc:
-        assert len(doc[0].get_image_info()) == 4                 # 画像1 は2か所に置いた
-        assert doc.metadata["author"] == "" and not doc.get_xml_metadata()
-        keys = [doc.xref_get_key(x, IMAGE_KEY) for x in range(1, doc.xref_length())]
-        assert sum(1 for k in keys if k[0] != "null") == 2       # 同じ中身の 1・3 は1つにまとまり、番号は配列
+    assert pdfcheck.images(path) == 4                            # 画像1 は2か所に置いた
+    info, xmp, _ = pdfcheck.metadata(path)
+    assert not info and not xmp                                  # 文書情報（作成者など）と XMP は入れない
+    # 同じ中身の 1・3 は1つにまとまり、番号は配列
+    assert sorted(map(str, pdfcheck.image_marks(path, IMAGE_KEY))) == ["2", "[1, 3]"]
     # 画像は字を持たないので、構文ファイルとの突き合わせの字は変わらない
     assert pdf_body_text(str(path), ts)[0] == "本文。"
 

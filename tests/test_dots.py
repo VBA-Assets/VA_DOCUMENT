@@ -1,6 +1,5 @@
 """傍点（*文字*。字の上に黒丸を付ける。2026-10-24 班長指示）。"""
-import fitz
-
+import pdfcheck
 from va_document.doctypes import DOC_TYPES
 from va_document.document import (PAGE_BREAK, TITLE, line_mark, move_wraps_after_marks, parse, split_inline,
                                   split_inline_full)
@@ -33,14 +32,7 @@ def test_dots_with_lead_marks():
 
 def dots_in(data):
     """PDF の黒丸（傍点）の中心 [(ページ, x, y)]。"""
-    out = []
-    with fitz.open(stream=data, filetype="pdf") as doc:
-        for k, page in enumerate(doc):
-            for d in page.get_drawings():
-                if d.get("fill") == (0.0, 0.0, 0.0) and d["rect"].width < 3:
-                    r = d["rect"]
-                    out.append((k, (r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2))
-    return out
+    return pdfcheck.dots(data)
 
 
 def test_dots_drawn_above_characters_without_moving_text():
@@ -57,9 +49,9 @@ def test_dots_drawn_above_characters_without_moving_text():
         assert any(abs(x - dx) < 0.01 for _, dx, _ in dots), ch
     first = next(ln for ln in lines if any(g.dot for g in ln.glyphs))
     _, _, y = dots[0]
-    assert abs(y - (ts.baseline(first.row) - DOT_RISE)) < 0.05     # 基準線から DOT_RISE 上（PyMuPDF は上から測る）
-    with fitz.open(stream=data, filetype="pdf") as doc:
-        assert "・" not in doc[0].get_text() and "被告の主張は争う。" in doc[0].get_text().replace("\n", "")
+    assert abs(y - (ts.baseline(first.row) - DOT_RISE)) < 0.05     # 基準線から DOT_RISE 上（上から測る）
+    text = pdfcheck.text(data, 0)
+    assert "・" not in text and "被告の主張は争う。" in text.replace("\n", "")
     plain = [(g.ch, round(g.x, 3), ln.row) for ln in ts.layout(parse([split_inline_full(t).plain for t in TEXT[:4]], DT))
              for g in ln.glyphs]
     marked = [(g.ch, round(g.x, 3), ln.row) for ln in ts.layout(parse(TEXT[:4], DT)) for g in ln.glyphs]

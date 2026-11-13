@@ -6,10 +6,9 @@
 """
 import tkinter as tk
 
-import fitz  # PyMuPDF
-
 from . import theme
 from .layout import FONT_SIZE
+from .pdfpages import PdfPages
 from .pdfwriter import FontNotEmbeddable
 from .pseudonym import TOKEN_RE
 
@@ -27,14 +26,16 @@ class PreviewMixin:
         try:
             data = self.session.preview_pdf(text, highlight=True)     # 蛍光ペンは確認表示だけで塗る
         except FontNotEmbeddable as e:
+            self.errors.record(e, "プレビュー")
             self.status.configure(text=str(e))
             return
         except Exception as e:      # 組めない文章でも、入力は続けられるようにする
+            self.errors.record(e, "プレビュー")      # 続けて同じ誤りなら、1件にまとめる（diagnostics.ErrorLog）
             self.status.configure(text=f"プレビューを作れませんでした：{e}")
             return
         if self._preview_doc is not None:
             self._preview_doc.close()
-        self._preview_doc = fitz.open(stream=data, filetype="pdf")
+        self._preview_doc = PdfPages(data)
         self._layout_pages()
         self._show_layout_warning()
 
@@ -51,7 +52,7 @@ class PreviewMixin:
 
     def _fit_zoom(self):
         """ページを欄の幅いっぱいに合わせる倍率。"""
-        return max(self.canvas.winfo_width(), 100) / self._preview_doc[0].rect.width
+        return max(self.canvas.winfo_width(), 100) / self._preview_doc.size(0)[0]
 
     def _layout_pages(self, keep=True):
         """全ページを縦に並べる（スクロールバー・ホイールでページをまたいで送れる）。
@@ -65,7 +66,8 @@ class PreviewMixin:
         fraction = self.canvas.yview()[0] if keep else 0.0
         zoom = self._fit_zoom()
         width = max(self.canvas.winfo_width(), 100)
-        self._page_size = (round(doc[0].rect.width * zoom), round(doc[0].rect.height * zoom))
+        page_w, page_h = doc.size(0)
+        self._page_size = (round(page_w * zoom), round(page_h * zoom))
         pw, ph = self._page_size
         self._page_x = 0
         self._page_tops = [k * (ph + PAGE_GAP) for k in range(len(doc))]
@@ -198,8 +200,7 @@ class PreviewMixin:
         for k, y in enumerate(self._page_tops):
             if y + ph < top - ph or y > bottom + ph or k in self._page_images:
                 continue
-            pix = doc[k].get_pixmap(matrix=fitz.Matrix(self._render_zoom, self._render_zoom), alpha=False)
-            self._page_images[k] = tk.PhotoImage(data=pix.tobytes("png"))
+            self._page_images[k] = tk.PhotoImage(data=doc.render(k, self._render_zoom).png())
             self.canvas.create_image(self._page_x, y, image=self._page_images[k], anchor="nw")
             self.canvas.tag_raise("caret")
         # 表示中のページ：確認表示の真ん中にあるページ（一番上・一番下まで送ったときは、最初・最後のページ）

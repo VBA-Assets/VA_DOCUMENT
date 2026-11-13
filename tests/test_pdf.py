@@ -7,8 +7,11 @@ VA公用文に入れる 試作/見本_裁判所.md は行頭の全角空白）�
 import difflib
 from pathlib import Path
 
-import fitz
 import pytest
+from pypdf import PdfReader, PdfWriter
+from pypdf.generic import ArrayObject, ByteStringObject
+
+import pdfcheck
 
 from va_document.doctypes import DOC_TYPES
 from va_document.document import parse
@@ -19,16 +22,9 @@ DATA = Path(__file__).parent / "data"
 
 
 def chars(path):
-    out = []
-    with fitz.open(path) as doc:
-        for pno, page in enumerate(doc, start=1):
-            for b in page.get_text("rawdict")["blocks"]:
-                for ln in b.get("lines", []):
-                    for sp in ln["spans"]:
-                        for ch in sp["chars"]:
-                            if ch["c"] not in (" ", "　"):
-                                out.append((ch["c"], pno, ch["origin"][0], ch["origin"][1]))
-    return out
+    """PDF の字（字, ページ, 字の左端, 基準線）。空白は除く。"""
+    return [(c["text"], pno, c["x"], c["y"]) for pno, page in enumerate(pdfcheck.all_chars(path), start=1)
+            for c in page if c["text"] not in (" ", "　")]
 
 
 @pytest.fixture(scope="module")
@@ -60,17 +56,27 @@ def test_same_position_as_va_kouyoubun_pdf(saiban_pdf):
 def test_id_and_no_metadata(saiban_pdf):
     """識別子に文書ID と版が入り、文書情報と XMP が入っていない。"""
     assert read_id(str(saiban_pdf)) == ("K7Q29XMD", 3)
-    with fitz.open(saiban_pdf) as doc:
-        assert not any(doc.metadata.get(k) for k in ("title", "author", "subject", "keywords", "creator", "producer"))
-        assert doc.get_xml_metadata() == ""
+    info, xmp, ids = pdfcheck.metadata(saiban_pdf)
+    assert info is None and not xmp                     # 文書情報（作成ソフト・作成者・日時など）も XMP も入れない
+    assert ids == [b"VAMD:K7Q29XMD:000003"] * 2
+    data = saiban_pdf.read_bytes()
+    assert b"ReportLab" not in data and b"pypdf" not in data
 
 
 def test_id_survives_resave(saiban_pdf, tmp_path):
-    """保存し直しても、識別子の文書ID と版が残る。"""
+    """保存し直しても、識別子の文書ID と版が残る（pypdf。VA mints のメタデータの除去〔pikepdf〕も）。"""
     other = tmp_path / "保存し直し.pdf"
-    with fitz.open(saiban_pdf) as doc:
-        doc.save(other)
+    PdfWriter(clone_from=PdfReader(saiban_pdf)).write(other)
     assert read_id(str(other)) == ("K7Q29XMD", 3)
+    pikepdf = pytest.importorskip("pikepdf")
+    mints = tmp_path / "VA_mints.pdf"
+    with pikepdf.open(saiban_pdf) as pdf:          # VA mints の metadata_remover.py と同じ
+        for key in list(pdf.docinfo.keys()):
+            del pdf.docinfo[key]
+        with pdf.open_metadata(set_pikepdf_as_editor=False, update_docinfo=False) as meta:
+            meta.clear()
+        pdf.save(mints)
+    assert read_id(str(mints)) == ("K7Q29XMD", 3)
 
 
 def test_no_id_for_other_pdf():
@@ -81,10 +87,10 @@ def test_no_id_for_other_pdf():
 def test_no_id_for_va_documake_pdf(saiban_pdf, tmp_path):
     """Ver160 まで（VA DocuMake）の PDF の識別子（VADM:）は読まない（2026-10-27 班長決定）。"""
     old = tmp_path / "VA_DocuMake.pdf"
-    with fitz.open(saiban_pdf) as doc:
-        first = "VADM:K7Q29XMD:000003".encode("ascii").hex()
-        doc.xref_set_key(-1, "ID", f"[<{first}><{first}>]")
-        doc.save(old)
+    writer = PdfWriter(clone_from=PdfReader(saiban_pdf))
+    first = ByteStringObject(b"VADM:K7Q29XMD:000003")
+    writer._ID = ArrayObject([first, first])
+    writer.write(old)
     assert read_id(str(old)) is None
 
 

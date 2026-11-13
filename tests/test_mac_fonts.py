@@ -5,9 +5,10 @@ Mac の実機では確かめられないので、Windows で同じ文書を両�
 """
 from pathlib import Path
 
-import fitz
 import pytest
 from fontTools.ttLib import TTFont
+
+import pdfcheck
 
 from va_document.cleanup import clean
 from va_document.doctypes import (DOC_TYPES, PAGE_NUMBER_BOTTOM_CENTER, PAGE_NUMBER_BOTTOM_CENTER_DECORATED,
@@ -41,15 +42,11 @@ EXTRA = """\
 
 def chars(data):
     """PDF の字（字, ページ, 左右, 上下）と、埋め込んだ書体の名前（字の位置を比べる前に、書体が替わったことを確かめる）。"""
-    out = []
-    with fitz.open(stream=data, filetype="pdf") as doc:
-        out.append(sorted({f[3].split("+")[-1] for page in doc for f in page.get_fonts() if f[3] != "Helvetica"}))
-        for pno, page in enumerate(doc, start=1):
-            for b in page.get_text("rawdict")["blocks"]:
-                for ln in b.get("lines", []):
-                    for sp in ln["spans"]:
-                        for ch in sp["chars"]:
-                            out.append((ch["c"], pno, round(ch["origin"][0], 2), round(ch["origin"][1], 2)))
+    pages = pdfcheck.all_chars(data)
+    out = [sorted({c["font"].split("+")[-1] for page in pages for c in page})]
+    for pno, page in enumerate(pages, start=1):
+        for c in page:
+            out.append((c["text"], pno, round(c["x"], 2), round(c["y"], 2)))
     return out
 
 

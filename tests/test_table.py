@@ -3,8 +3,9 @@
 表は Word に合わせ込まない（比べる正解がない）ので、決まりごと（読み取り、左端・右端、列の幅、
 折り返し、改ページ、表の後の本文の位置）を確かめる。
 """
-import fitz
 import pytest
+
+import pdfcheck
 
 from va_document.doctypes import DOC_TYPES
 from va_document.document import BODY, parse, parse_table, with_column_widths
@@ -209,12 +210,10 @@ def test_table_in_pdf(tmp_path):
     ts, lines = layout(["| 科目 | 金額 |", "|===|---:|", "| 参加費 | 48,000 |"])
     path = tmp_path / "表.pdf"
     write_pdf(ts, lines, str(path))
-    with fitz.open(path) as doc:
-        text = doc[0].get_text()
-        drawings = doc[0].get_drawings()
+    text = pdfcheck.text(path, 0)
     assert "参加費" in text and "48,000" in text
     # 罫線：横の線（見出しの行の上・2重線の2本・最後の行の下）と縦の線（列の境目3本）
-    assert len(drawings) >= 1
+    assert pdfcheck.drawings(path, 0) >= 1
 
 
 def test_double_rule_if_any_column_has_equals():

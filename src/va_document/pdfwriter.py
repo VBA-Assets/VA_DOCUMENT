@@ -5,20 +5,27 @@
 ・PDF の文書情報（作成ソフト・作成者・日時など）と XMP は入れない（VA mints のメタデータ検出で
   「メタデータなし」になるようにするため）。
 ・ファイル識別子（トレーラーの /ID）の1つ目に「VAMD:<文書ID>:<版>」を入れる。2つ目は保存し直すと
-  作り直されるので使わない（2026-10-23、PyMuPDF・pikepdf で確認）。
+  作り直されるので使わない（2026-10-23、PyMuPDF・pikepdf で確認。2026-11-14 に pypdf でも確認）。
 ・画像（[IMAGE 1]{30}。2026-10-29 班長決定）は、付加情報を除いたもの（images.py）を PDF に入れ、画像の辞書に番号の目印
   /VAMDImage を入れる（番号のほかは入れない）。開き直すときは、この番号で構文ファイルの画像の行と結び直す（read_images）。
   画像は字を持たないので、構文ファイルとの突き合わせ（recover.py）には影響しない。
+・字・罫線は reportlab で描き、画像・文書情報・識別子の仕上げは pypdf（BSD-3）で行う。Ver300（2026-11-14 班長決定）で、
+  仕上げを PyMuPDF（AGPL-3.0）から替えた（VA Document を MIT License にするため）。替える前に、65 の見本で、PDF の画素・
+  字の並びと位置・識別子・文書情報が替える前と同じこと、画像が JPEG はバイトのまま、PNG は画素のまま戻ること、替える前の
+  版で保存した PDF からも画像と識別子が読めることを確かめた（試作\\pdf_finish_pypdf.py）。
 """
 import io
 import os
-import re
 import sys
 import tempfile
+import zlib
 from pathlib import Path
 
-import fitz  # PyMuPDF
 from fontTools.ttLib import TTCollection, TTFont as FTFont
+from PIL import Image
+from pypdf import PdfReader, PdfWriter
+from pypdf.generic import ArrayObject, ByteStringObject, DecodedStreamObject, DictionaryObject, NameObject, \
+    NumberObject, StreamObject
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
@@ -196,32 +203,77 @@ def pdf_bytes(ts, lines, doc_id=None, version=None, page_number=PAGE_NUMBER_BOTT
                 c.drawRightString(ts.margin_left + ts.text_w, y, s)
         c.showPage()
     c.save()
-    with fitz.open(stream=buf.getvalue(), filetype="pdf") as doc:
-        _insert_images(doc, ts, images)
-        _clean_and_mark(doc, doc_id, version)
-        return doc.tobytes(garbage=3, deflate=True)
+    writer = PdfWriter(clone_from=PdfReader(io.BytesIO(buf.getvalue())))
+    _insert_images(writer, ts, images)
+    _clean_and_mark(writer, doc_id, version)
+    for page in writer.pages:
+        page.compress_content_streams()
+    writer.compress_identical_objects(remove_duplicates=True, remove_unreferenced=True)
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
 
 
-def _insert_images(doc, ts, images):
+def _image_object(pic):
+    """Picture を画像の辞書（ストリーム）にする。JPEG はバイトのまま（DCTDecode）入れ、ほかは画素を Flate で入れる
+    （images.py で、色は RGB か灰色、透過なしにしてある）。"""
+    with Image.open(io.BytesIO(pic.data)) as im:
+        jpeg = im.format == "JPEG"
+        gray = im.mode == "L"
+        if not jpeg:
+            raw = im.convert("L" if gray else "RGB").tobytes()
+        width, height = im.size
+    s = StreamObject()
+    s._data = pic.data if jpeg else zlib.compress(raw, 9)
+    s.update({
+        NameObject("/Type"): NameObject("/XObject"), NameObject("/Subtype"): NameObject("/Image"),
+        NameObject("/Width"): NumberObject(width), NameObject("/Height"): NumberObject(height),
+        NameObject("/ColorSpace"): NameObject("/DeviceGray" if gray else "/DeviceRGB"),
+        NameObject("/BitsPerComponent"): NumberObject(8),
+        NameObject("/Filter"): NameObject("/DCTDecode" if jpeg else "/FlateDecode"),
+    })
+    return s
+
+
+def _num(v):
+    return f"{v:.4f}".rstrip("0").rstrip(".")
+
+
+def _insert_images(writer, ts, images):
     """画像を所定の位置に入れ、画像の辞書に番号の目印（/VAMDImage）を入れる。同じ番号の画像を2か所に置いたときは、
-    同じ画像を1つだけ入れて2か所から使う。中身が同じ画像を別の番号で入れると、PyMuPDF が1つにまとめるので、
-    目印は番号の配列（[1 2]）にする。"""
-    xrefs, numbers = {}, {}
+    同じ画像を1つだけ入れて2か所から使う。中身が同じ画像を別の番号で入れたときも1つにまとめ（替える前の PyMuPDF と
+    同じ）、目印は番号の配列（[1 2]）にする。画像は、ページの字・罫線の上に重ねる。"""
+    refs, numbers, by_data, placed = {}, {}, {}, {}
     for piece in ts.images:
-        pic = images.get(piece.number)
+        pic = (images or {}).get(piece.number)
         if pic is None:
             continue
-        x0 = ts.margin_left + piece.x
-        rect = fitz.Rect(x0, piece.y, x0 + piece.w, piece.y + piece.h)
-        page = doc[piece.page - 1]
-        if piece.number in xrefs:
-            page.insert_image(rect, xref=xrefs[piece.number], keep_proportion=False)
-        else:
-            xref = page.insert_image(rect, stream=pic.data, keep_proportion=False)
-            xrefs[piece.number] = xref
-            numbers.setdefault(xref, []).append(piece.number)
-    for xref, ns in numbers.items():
-        doc.xref_set_key(xref, IMAGE_KEY, str(ns[0]) if len(ns) == 1 else "[" + " ".join(map(str, ns)) + "]")
+        if piece.number not in refs:
+            ref = by_data.get(pic.data)
+            if ref is None:
+                ref = by_data[pic.data] = writer._add_object(_image_object(pic))
+            refs[piece.number] = ref
+            numbers.setdefault(ref.idnum, (ref, []))[1].append(piece.number)
+        x = ts.margin_left + piece.x
+        y = PAGE_H - piece.y - piece.h          # PDF の y は下から
+        placed.setdefault(piece.page - 1, []).append((refs[piece.number], x, y, piece.w, piece.h))
+    for pi, items in placed.items():
+        page = writer.pages[pi]
+        res = DictionaryObject(page["/Resources"].get_object())     # ほかのページと共有していても、このページだけ
+        xo = DictionaryObject(res.get("/XObject", DictionaryObject()).get_object())
+        ops = []
+        for ref, x, y, w, h in items:
+            name = f"/VAMDImg{ref.idnum}"
+            xo[NameObject(name)] = ref
+            ops.append(f"q {_num(w)} 0 0 {_num(h)} {_num(x)} {_num(y)} cm {name} Do Q")
+        res[NameObject("/XObject")] = xo
+        page[NameObject("/Resources")] = res
+        content = DecodedStreamObject()
+        content.set_data(b"q\n" + page.get_contents().get_data() + b"\nQ\n" + "\n".join(ops).encode("ascii") + b"\n")
+        page[NameObject("/Contents")] = writer._add_object(content)
+    for ref, ns in numbers.values():
+        ref.get_object()[NameObject("/" + IMAGE_KEY)] = (
+            NumberObject(ns[0]) if len(ns) == 1 else ArrayObject(NumberObject(n) for n in ns))
 
 
 def _draw_missing(c, ts, pieces):
@@ -243,23 +295,32 @@ def _draw_missing(c, ts, pieces):
 def read_images(path):
     """VA Documentの PDF から、番号の目印（/VAMDImage）のある画像を取り出し、{番号: Picture} を返す。取り出した
     データは作り直さない（JPEG を保存のたびに作り直すと、画質が落ちていくため。入れるときに付加情報を除いてある）。"""
-    out = {}
-    with fitz.open(path) as doc:
-        for xref in range(1, doc.xref_length()):
+    out, seen = {}, set()
+    for page in PdfReader(str(path)).pages:
+        res = page.get("/Resources")
+        xo = res.get_object().get("/XObject") if res is not None else None
+        if not xo:
+            continue
+        for ref in xo.get_object().values():
             try:
-                kind, val = doc.xref_get_key(xref, IMAGE_KEY)
-                if kind == "int":
-                    ns = [int(val)]
-                elif kind == "array":
-                    ns = [int(v) for v in val.strip("[]").split()]
-                else:
+                obj = ref.get_object()
+                key = getattr(ref, "idnum", id(obj))
+                if key in seen or obj.get("/Subtype") != "/Image" or "/" + IMAGE_KEY not in obj:
                     continue
-                img = doc.extract_image(xref)
-            except (ValueError, RuntimeError):
+                seen.add(key)
+                val = obj["/" + IMAGE_KEY]
+                ns = [int(v) for v in val] if isinstance(val, ArrayObject) else [int(val)]
+                if obj.get("/Filter") == "/DCTDecode":
+                    data = obj._data                # JPEG のバイトのまま
+                else:
+                    buf = io.BytesIO()
+                    obj.decode_as_image().save(buf, "PNG")
+                    data = buf.getvalue()
+                pic = Picture(data, int(obj["/Width"]), int(obj["/Height"]))
+            except Exception:       # 読めない画像は飛ばす（替える前と同じ）
                 continue
-            if img:
-                for n in ns:
-                    out.setdefault(n, Picture(img["image"], img["width"], img["height"]))
+            for n in ns:
+                out.setdefault(n, pic)
     return out
 
 
@@ -334,28 +395,25 @@ def draw_table(c, ts, piece, highlight=False):
         c.line(ts.margin_left + x, PAGE_H - top, ts.margin_left + x, PAGE_H - bottom)
 
 
-def _clean_and_mark(doc, doc_id, version):
-    """文書情報と XMP を取り除き、識別子に文書ID と版を入れる。"""
-    doc.set_metadata({})
-    doc.del_xml_metadata()
+def _clean_and_mark(writer, doc_id, version):
+    """文書情報（pypdf が足す作成ソフトの名前も）と XMP を取り除き、識別子の2つとも「VAMD:<文書ID>:<版>」にする。"""
+    writer.metadata = None
+    if "/Metadata" in writer._root_object:
+        del writer._root_object["/Metadata"]
     if doc_id is not None:
-        first = f"{ID_PREFIX}:{doc_id}:{int(version):06d}".encode("ascii").hex()
-        doc.xref_set_key(-1, "ID", f"[<{first}><{first}>]")
+        first = f"{ID_PREFIX}:{doc_id}:{int(version):06d}".encode("ascii")
+        writer._ID = ArrayObject([ByteStringObject(first), ByteStringObject(first)])
 
 
 def read_id(path):
     """PDF の識別子から (文書ID, 版) を読み出す。VA Documentの識別子でなければ None を返す。"""
-    with fitz.open(path) as doc:
-        kind, val = doc.xref_get_key(-1, "ID")
-    if kind != "array":
-        return None
-    # 1つ目の要素は、文字列（(…)）か16進（<…>）のどちらかの形で返る
-    m = re.match(r"\[\s*(?:\((?P<lit>[^)]*)\)|<(?P<hex>[0-9A-Fa-f]*)>)", val)
-    if not m:
+    ids = PdfReader(str(path)).trailer.get("/ID")
+    if not ids:
         return None
     try:
-        text = m.group("lit") if m.group("lit") is not None else bytes.fromhex(m.group("hex")).decode("ascii")
-        prefix, doc_id, version = text.split(":")
+        first = ids.get_object()[0].get_object()
+        raw = first.original_bytes if hasattr(first, "original_bytes") else bytes(first)
+        prefix, doc_id, version = raw.decode("ascii").split(":")
         return (doc_id, int(version)) if prefix == ID_PREFIX else None
-    except (ValueError, UnicodeDecodeError):
+    except (ValueError, UnicodeDecodeError, IndexError, TypeError):
         return None

@@ -1,6 +1,5 @@
 """太字（**文字**。ＭＳ ゴシックで描く。2026-10-24 班長指示）。"""
-import fitz
-
+import pdfcheck
 from va_document.doctypes import DOC_TYPES
 from va_document.document import TOC, parse, split_inline
 from va_document.layout import Typesetter
@@ -44,19 +43,18 @@ def test_pdf_draws_bold_in_ms_gothic():
     ts = Typesetter(DT)
     lines = ts.layout(parse(["# 見出し", "本文の**一部**を強調する。", "| 項目 | 金額 |", "|---|---|",
                              "| **休業**損害 | 1,000 |"], DT))
-    with fitz.open(stream=pdf_bytes(ts, lines), filetype="pdf") as doc:
-        spans = [(s["text"], s["font"]) for b in doc[0].get_text("dict")["blocks"] for ln in b.get("lines", [])
-                 for s in ln["spans"]]
-    gothic = "".join(t for t, f in spans if "Gothic" in f)
+    chars = pdfcheck.chars(pdf_bytes(ts, lines))
+    gothic = "".join(c["text"] for c in chars if "Gothic" in c["font"])
     assert gothic == "一部休業"
-    assert all("Mincho" in f for t, f in spans if t not in ("一部", "休業"))
+    assert all("Mincho" in c["font"] for c in chars if c["text"] not in "一部休業")
 
 
 def test_pdf_without_bold_has_no_gothic():
     ts = Typesetter(DT)
     lines = ts.layout(parse(["# 見出し", "本文。"], DT))
-    with fitz.open(stream=pdf_bytes(ts, lines), filetype="pdf") as doc:
-        assert all("Gothic" not in f[3] for f in doc.get_page_fonts(0))
+    # 字に使う書体だけでなく、PDF に入れた書体にもゴシックがない
+    data = pdf_bytes(ts, lines)
+    assert all("Gothic" not in f for f in pdfcheck.fonts(data)) and b"Gothic" not in data
 
 
 def test_toc_entries_are_not_bold():
