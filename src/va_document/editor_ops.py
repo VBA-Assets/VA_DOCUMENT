@@ -8,7 +8,7 @@ import math
 import re
 import tkinter as tk
 
-from . import html_paste, vamd
+from . import html_paste, theme, vamd
 from .document import (ALIGN_MARKS, BLANK, BULLET, BULLET_MARK, CELL_ALIGN_RE, CENTER_MARK, DISTRIBUTE_CLOSE_RE, DISTRIBUTE_OPEN,
                        HEADING, HEADING_BUTTON_MARK, HEADING_MARK_RE,
                        LEFT_INDENT_MARK, LIST_MARK_RE, NUMBER, NUMBER_MARK, PAGE_BREAK, RIGHT_MARK, SECTION_BREAK,
@@ -730,6 +730,49 @@ class EditorMixin(EditorMarkMixin, TableCellMixin, ImageMixin):
         self.text.edit_modified(False)
         self._update_title()
         self.refresh()
+
+    # ----------------------------------------------------------------------
+    # 右クリックのメニュー（2026-11-15 班長指示「選択した文字列のコピーと貼り付けをできるようにする」）
+    # ----------------------------------------------------------------------
+
+    def _init_editor_menu(self):
+        """エディターの右クリックのメニュー（［コピー］［貼り付け］［選択範囲を仮名化…］）。Mac では右クリックが Button-2 になり、
+        Control+クリックでも開く（Mac のふつうの操作）。"""
+        mac = self.tk.call("tk", "windowingsystem") == "aqua"
+        key = "⌘" if mac else "Ctrl+"
+        self.editor_menu = menu = tk.Menu(self.text, tearoff=0, background=theme.FIELD_BG, foreground=theme.TEXT,
+                                          activebackground=theme.HOVER_BG, activeforeground=theme.TEXT)
+        # 働きは Ctrl+C・Ctrl+V と同じにする（仮想イベントを送る）。貼り付けは、Ctrl+V と同じく、仮名化した語を
+        # 記号に置き換え、表・書式付きの字・画像も同じように貼る（_on_paste）。コピーするのはエディターの字なので、
+        # 仮名化した語は記号のまま写る
+        menu.add_command(label="コピー", accelerator=f"{key}C", command=lambda: self.text.event_generate("<<Copy>>"))
+        menu.add_command(label="貼り付け", accelerator=f"{key}V",
+                         command=lambda: self.text.event_generate("<<Paste>>"))
+        # 仮名化は、リボンの［選択範囲を仮名化］と同じ働き（2026-11-15 班長指示「右クリックメニューに仮名化を追加」）。
+        # 記号の英字を選ぶ画面が開くので「…」を付ける
+        menu.add_separator()
+        menu.add_command(label="選択範囲を仮名化…", command=self.on_register)
+        for seq in (("<Button-2>", "<Control-Button-1>") if mac else ("<Button-3>",)):
+            self.text.bind(seq, self.on_editor_menu)
+
+    def on_editor_menu(self, event):
+        """右クリックした所にメニューを出す。選んだ範囲の外で押したら、選択を外してカーソルをそこへ動かす（Word と
+        同じ）。範囲の中で押したら、選択はそのまま。字を選んでいなければ［コピー］［選択範囲を仮名化…］は押せない。"""
+        self.text.focus_set()
+        index = self.text.index(f"@{event.x},{event.y}")
+        span = self._sel_range()
+        if not (span and self.text.compare(span[0], "<=", index) and self.text.compare(index, "<=", span[1])):
+            self.text.tag_remove("sel", "1.0", "end")
+            self.text.mark_set("insert", index)
+            self._schedule_caret()
+        state = "normal" if self._sel_range() else "disabled"
+        for label in ("コピー", "選択範囲を仮名化…"):
+            self.editor_menu.entryconfigure(label, state=state)
+        try:
+            self.editor_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.editor_menu.grab_release()
+        return "break"
 
     def clipboard_text(self):
         """クリップボードの字（なければ None）。clipboard_get ではなく selection_get で読む：Tk の clipboard_get は、

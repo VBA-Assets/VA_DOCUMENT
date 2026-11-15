@@ -469,6 +469,8 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
         # Ctrl+Z・Ctrl+Y は、仮名化の登録・解除も一緒に戻す（2026-11-01 班長決定）
         self.text.bind("<<Undo>>", self.on_undo)
         self.text.bind("<<Redo>>", self.on_redo)
+        # 右クリックのメニュー（コピー・貼り付け。2026-11-15 班長指示。editor_ops）
+        self._init_editor_menu()
         # エディターでカーソルを動かすと、その字のあるページを確認表示に出す（2026-10-23 班長指示）
         self._caret_job = None
         for seq in ("<KeyRelease>", "<ButtonRelease-1>"):

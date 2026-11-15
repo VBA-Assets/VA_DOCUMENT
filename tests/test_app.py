@@ -2578,6 +2578,66 @@ def test_paste_excel_table(window, monkeypatch):
     assert window.raw_text() == PSEUDO
 
 
+def test_editor_context_menu(window, monkeypatch):
+    """右クリックのメニュー：［コピー］［貼り付け］［選択範囲を仮名化…］。範囲の外で押すと選択を外してカーソルを動かし、
+    中で押すと選択はそのまま。選んでいなければ［コピー］［選択範囲を仮名化…］は押せない。［貼り付け］は Ctrl+V と同じく、
+    仮名化した語を記号にして貼る。［選択範囲を仮名化…］はリボンの［選択範囲を仮名化］と同じ働き。"""
+    from types import SimpleNamespace
+    menu = window.editor_menu
+    assert [menu.entrycget(i, "label") for i in range(menu.index("end") + 1) if menu.type(i) == "command"] == [
+        "コピー", "貼り付け", "選択範囲を仮名化…"]
+    assert window.text.bind("<Button-3>")
+    posted = []
+    monkeypatch.setattr(menu, "tk_popup", lambda x, y: posted.append((x, y)))
+    # 隠したウィンドウでは @x,y の位置が決まらないので、押した所の位置を差し替える
+    at = {"index": "4.1"}
+    real_index = window.text.index
+    monkeypatch.setattr(window.text, "index", lambda i: at["index"] if str(i).startswith("@") else real_index(i))
+    click = SimpleNamespace(x=1, y=1, x_root=100, y_root=200)
+
+    # 選んだ範囲の中で押す：選択はそのまま、［コピー］を押せる
+    window.text.tag_add("sel", "4.0", "4.3")
+    assert window.on_editor_menu(click) == "break"
+    assert posted == [(100, 200)]
+    assert window._sel_range() == ("4.0", "4.3")
+    assert menu.entrycget(0, "state") == "normal"
+    assert menu.entrycget("選択範囲を仮名化…", "state") == "normal"
+    sent = []
+    real_generate = window.text.event_generate
+    monkeypatch.setattr(window.text, "event_generate", lambda seq: sent.append(seq))   # 班長のクリップボードに書かない
+    menu.invoke(0)
+    assert sent == ["<<Copy>>"]
+    monkeypatch.setattr(window.text, "event_generate", real_generate)
+
+    # 範囲の外で押す：選択を外して、カーソルを押した所へ動かす。［コピー］は押せない
+    at["index"] = "2.1"
+    window.on_editor_menu(click)
+    assert window._sel_range() is None
+    assert window.text.index("insert") == "2.1"
+    assert menu.entrycget(0, "state") == "disabled"
+    assert menu.entrycget("選択範囲を仮名化…", "state") == "disabled"
+
+    # ［貼り付け］は Ctrl+V と同じ働き（仮名化した語を記号に置き換える）
+    monkeypatch.setattr(window, "clipboard_text", lambda: "甲野太郎")
+    menu.invoke(1)
+    assert window._line(2) == ":〔人名Ａ〕=: 準備書面（１）"
+    window.text.edit_undo()
+    assert window.raw_text() == PSEUDO
+
+    # ［選択範囲を仮名化…］は、リボンの［選択範囲を仮名化］と同じく、記号の英字を選ぶ画面を開いて仮名化する。
+    # Ctrl+Z 1回で、一覧の語ごと戻る
+    monkeypatch.setattr(ai_ops, "RegisterDialog", lambda parent, word, d: type("D", (), {"result": ("人名", "b")})())
+    window.text.tag_add("sel", "4.6", "4.8")        # 「主張」
+    at["index"] = "4.7"
+    window.on_editor_menu(click)
+    menu.invoke("選択範囲を仮名化…")
+    assert window._line(4) == "〔人名Ａ〕の〔人名Ｂ〕は争う。"
+    assert window.session.dictionary.find("主張") is not None
+    window.on_undo()
+    assert window.raw_text() == PSEUDO
+    assert window.session.dictionary.find("主張") is None
+
+
 def _image_line(window, width=12, lead=":-: "):
     n = window.session.add_picture(_picture(), window.raw_text())
     window.text.insert("end", f"{lead}[IMAGE {n}]{{{width}}}\n")
