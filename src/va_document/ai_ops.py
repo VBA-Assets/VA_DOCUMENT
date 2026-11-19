@@ -6,7 +6,7 @@
 from dataclasses import dataclass
 from tkinter import TclError, filedialog, messagebox
 
-from . import APP_NAME, diagnostics, vamd
+from . import APP_NAME, errors, vamd
 from .dialogs import UNREGISTER, ChangedOutsideDialog, EditDialog, LoadEntriesDialog, RegisterDialog
 from .pseudonym import KINDS, NotRegistrable, token_label, trim_selection
 from .recover import PdfMismatch
@@ -210,7 +210,7 @@ class AiMixin:
             return
         except (PdfMismatch, OSError, ValueError) as e:
             self.errors.record(e, "仮名化する語の読み込み")
-            messagebox.showerror(APP_NAME, f"読み込めませんでした。\n{diagnostics.describe(e)}", parent=self)
+            messagebox.showerror(APP_NAME, f"読み込めませんでした。\n{errors.describe(e)}", parent=self)
             return
         plan = loaded.plan
         if plan.conflicts:

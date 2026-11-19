@@ -6,7 +6,7 @@
 """
 import tkinter as tk
 
-from . import diagnostics, theme
+from . import errors, theme
 from .layout import FONT_SIZE
 from .pdfpages import PdfPages
 from .pdfwriter import FontNotEmbeddable
@@ -31,7 +31,7 @@ class PreviewMixin:
             return
         except Exception as e:      # 組めない文章でも、入力は続けられるようにする
             self.errors.record(e, "プレビュー")      # 続けて同じ誤りなら、1件にまとめる（diagnostics.ErrorLog）
-            self.status.configure(text="プレビューを作れませんでした：" + diagnostics.describe(e).replace("\n", "　"))
+            self.status.configure(text="プレビューを作れませんでした：" + errors.describe(e).replace("\n\n", "\n").replace("\n", "　"))
             return
         if self._preview_doc is not None:
             self._preview_doc.close()

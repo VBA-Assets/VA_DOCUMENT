@@ -3,7 +3,7 @@
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from . import APP_NAME, diagnostics, theme
+from . import APP_NAME, errors, theme
 from .pseudonym import KINDS, NotRegistrable, letters_to_number, make_token, token_label, to_wide
 
 
@@ -579,10 +579,10 @@ class PrintDialog(_Dialog):
         try:
             mode = self.show_properties(int(self.wm_frame(), 16), name, self.modes.get(name))
         except Exception as e:
-            errors = getattr(self.master, "errors", None)       # 本体の誤りの記録（診断情報に載せる）
-            if errors is not None:
-                errors.record(e, "プリンターの設定")
-            messagebox.showerror(APP_NAME, f"プリンターの設定の画面を開けませんでした。\n{diagnostics.describe(e)}",
+            error_log = getattr(self.master, "errors", None)    # 本体の誤りの記録（診断情報に載せる）
+            if error_log is not None:
+                error_log.record(e, "プリンターの設定")
+            messagebox.showerror(APP_NAME, f"プリンターの設定の画面を開けませんでした。\n{errors.describe(e)}",
                                  parent=self)
             return
         if mode is not None:
