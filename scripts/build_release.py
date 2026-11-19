@@ -1,6 +1,6 @@
 """配布用のリリース（release_VerNNN\\VA_Document_VerNNN\\ と dist\\VA_Document_VerNNN.zip）を組み立てる。
 
-VA mints の build_release.py と同じ作り。統合版のインストーラー（VA_mintsシリーズ共通\\統合版）は、
+VA mints の build_release.py と同じ作り。統合版のインストーラー（..\\共通\\統合版）は、
 release_VerNNN\\VA_Document_VerNNN\\ を直接参照する。
 
 前提（このスクリプトはビルドそのものはしない。先に済ませておく）：

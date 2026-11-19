@@ -3,7 +3,7 @@
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from . import APP_NAME, theme
+from . import APP_NAME, diagnostics, theme
 from .pseudonym import KINDS, NotRegistrable, letters_to_number, make_token, token_label, to_wide
 
 
@@ -28,7 +28,7 @@ class _Dialog(tk.Toplevel):
     def cancel(self):
         self.destroy()
 
-    def buttons(self, ok_text, ok_command, cancel_text="やめる"):
+    def buttons(self, ok_text, ok_command, cancel_text="キャンセル"):
         bar = ttk.Frame(self, padding=(12, 8, 12, 12))
         bar.pack(side="bottom", fill="x")
         ttk.Button(bar, text=cancel_text, command=self.cancel).pack(side="right")
@@ -166,7 +166,7 @@ class EditDialog(_Dialog, _TokenFields):
                   "AI の前の回答にある前の記号は、取り込むときに「仮名化する語の一覧にない記号」として知らせます。",
                   style="Note.TLabel", justify="left").pack(anchor="w", pady=(8, 0))
         bar = self.buttons("変える", self.ok)
-        # ［解除］は、［変える］［やめる］から離して左端に置く
+        # ［解除］は、［変える］［キャンセル］から離して左端に置く
         ttk.Button(bar, text="解除", command=self.unregister).pack(side="left")
         self.bind("<Return>", lambda e: self.ok())
         box.select_range(0, "end")
@@ -210,7 +210,7 @@ class ChangedOutsideDialog(_Dialog):
         ttk.Label(body, text=msg, justify="left").pack(anchor="w")
         bar = ttk.Frame(self, padding=(12, 10, 12, 12))
         bar.pack(side="bottom", fill="x")
-        ttk.Button(bar, text="やめる" if at_save else "取り込まない", command=self.cancel).pack(side="right")
+        ttk.Button(bar, text="キャンセル" if at_save else "取り込まない", command=self.cancel).pack(side="right")
         if at_save:
             ttk.Button(bar, text="上書きする", command=lambda: self.choose("overwrite")).pack(side="right", padx=(0, 8))
         ttk.Button(bar, text="取り込む", style="Accent.TButton",
@@ -403,15 +403,15 @@ class OptionsDialog(_Dialog):
         from pathlib import Path
         folder = self.folder.get().strip()
         if not folder or not Path(folder).is_dir():
-            messagebox.showerror("オプション", "構文ファイルの保存場所のフォルダが見つかりません。", parent=self)
+            messagebox.showerror(APP_NAME, "構文ファイルの保存場所のフォルダが見つかりません。", parent=self)
             return
         try:
             size, spacing = int(self.size.get()), int(self.spacing.get())
         except ValueError:
-            messagebox.showerror("オプション", "字の大きさと行の間隔は、数字で入れてください。", parent=self)
+            messagebox.showerror(APP_NAME, "字の大きさと行の間隔は、数字で入れてください。", parent=self)
             return
         if not (self.size_range[0] <= size <= self.size_range[1] and self.spacing_range[0] <= spacing <= self.spacing_range[1]):
-            messagebox.showerror("オプション", f"字の大きさは {self.size_range[0]}〜{self.size_range[1]}、行の間隔は "
+            messagebox.showerror(APP_NAME, f"字の大きさは {self.size_range[0]}〜{self.size_range[1]}、行の間隔は "
                                  f"{self.spacing_range[0]}〜{self.spacing_range[1]} の数字にしてください。", parent=self)
             return
         family = self.family.get()
@@ -579,7 +579,11 @@ class PrintDialog(_Dialog):
         try:
             mode = self.show_properties(int(self.wm_frame(), 16), name, self.modes.get(name))
         except Exception as e:
-            messagebox.showerror("印刷", f"プリンターの設定の画面を開けませんでした。\n{e}", parent=self)
+            errors = getattr(self.master, "errors", None)       # 本体の誤りの記録（診断情報に載せる）
+            if errors is not None:
+                errors.record(e, "プリンターの設定")
+            messagebox.showerror(APP_NAME, f"プリンターの設定の画面を開けませんでした。\n{diagnostics.describe(e)}",
+                                 parent=self)
             return
         if mode is not None:
             self.modes[name] = mode
@@ -587,19 +591,19 @@ class PrintDialog(_Dialog):
     def accept(self):
         name = self.printer.get()
         if not name:
-            messagebox.showerror("印刷", "プリンターを選んでください。", parent=self)
+            messagebox.showerror(APP_NAME, "プリンターを選んでください。", parent=self)
             return
         try:
             copies = int(self.copies.get())
             if not 1 <= copies <= 99:
                 raise ValueError
         except ValueError:
-            messagebox.showerror("印刷", "部数は 1〜99 の数字にしてください。", parent=self)
+            messagebox.showerror(APP_NAME, "部数は 1〜99 の数字にしてください。", parent=self)
             return
         try:
             pages = self._chosen_pages()
         except ValueError:
-            messagebox.showerror("印刷", f"ページの指定を読めません（1〜{self.pages} の数字を、「1-3, 5」のように"
+            messagebox.showerror(APP_NAME, f"ページの指定を読めません（1〜{self.pages} の数字を、「1-3, 5」のように"
                                  "書いてください）。", parent=self)
             return
         self.result = (name, self.modes.get(name), copies, pages)

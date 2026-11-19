@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
-from . import APP_NAME, config, naiyou, printing, vamd
+from . import APP_NAME, config, diagnostics, naiyou, printing, vamd
 from .dialogs import ChangedOutsideDialog, MissingDialog, NaiyouDialog, PrintDialog
 from .doctypes import PAGE_NUMBER_LABELS, PAGE_NUMBER_NONE
 from .document import image_mark
@@ -94,7 +94,7 @@ class FileMixin:
             return
         except (PdfMismatch, OSError, ValueError) as e:
             self.errors.record(e, "開く")
-            messagebox.showerror(APP_NAME, f"開けませんでした。\n{e}", parent=self)
+            messagebox.showerror(APP_NAME, f"開けませんでした。\n{diagnostics.describe(e)}", parent=self)
             return
         if result is None:
             return
@@ -193,7 +193,7 @@ class FileMixin:
             return False
         except (OSError, FontNotEmbeddable) as e:
             self.errors.record(e, "保存")
-            messagebox.showerror(APP_NAME, f"保存できませんでした。\n{e}", parent=self)
+            messagebox.showerror(APP_NAME, f"保存できませんでした。\n{diagnostics.describe(e)}", parent=self)
             return False
         config.save(self.cfg)
         self._update_title()
@@ -329,7 +329,7 @@ class FileMixin:
             data = self.session.preview_pdf(text)
         except Exception as e:
             self.errors.record(e, "印刷")
-            messagebox.showerror(APP_NAME, f"印刷するページを組めませんでした。\n{e}", parent=self)
+            messagebox.showerror(APP_NAME, f"印刷するページを組めませんでした。\n{diagnostics.describe(e)}", parent=self)
             return
         # VA Document の「印刷」画面で選ぶ（2026-10-24 班長決定。Windows の新しい印刷画面の紛らわしい知らせを避ける）。
         # 印刷プレビューで、紙に出るものを確かめられる（2026-10-30 班長決定）
@@ -343,7 +343,7 @@ class FileMixin:
             hdc = printing.make_dc(name, mode, copies)
         except printing.PrintError as e:
             self.errors.record(e, "印刷")
-            messagebox.showerror(APP_NAME, f"印刷できませんでした。\n{e}", parent=self)
+            messagebox.showerror(APP_NAME, f"印刷できませんでした。\n{diagnostics.describe(e)}", parent=self)
             return
 
         def progress(done, total):
@@ -357,7 +357,7 @@ class FileMixin:
             n = printing.print_pdf(data, hdc, doc_name, page_list, progress=progress)
         except (printing.PrintError, OSError) as e:
             self.errors.record(e, "印刷")
-            messagebox.showerror(APP_NAME, f"印刷できませんでした。\n{e}", parent=self)
+            messagebox.showerror(APP_NAME, f"印刷できませんでした。\n{diagnostics.describe(e)}", parent=self)
             self.status.configure(text="印刷できませんでした。")
             return
         finally:

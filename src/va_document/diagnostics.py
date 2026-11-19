@@ -12,6 +12,7 @@
 import json
 import os
 import platform
+import re
 import sys
 import traceback
 from datetime import datetime
@@ -144,3 +145,34 @@ def _tk_patchlevel(root):
         return root.tk.call("info", "patchlevel")
     except Exception:
         return "不明"
+
+
+# ---------------------------------------------------------------- 例外を画面に出すときの文（標準 02「メッセージとエラー」）
+
+DIAGNOSTICS_HINT = "続くときは、［ヘルプ］→［診断情報をコピー］で診断情報をコピーして、記事のコメント欄でお知らせください。"
+_JAPANESE = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff]")
+
+
+def is_for_user(e):
+    """例外の文が、利用者向けに書いた文か。このパッケージが日本語の文で投げる例外（PdfMismatch・PrintError など）は、
+    そのまま見せる文として書いてある。OSError（Windows の文と英語の混じった文。ファイルの場所が入る）や、部品が投げる
+    英語の文の例外は、そうでない。"""
+    if isinstance(e, OSError):
+        return False
+    return bool(_JAPANESE.search(str(e)))
+
+
+def describe(e):
+    """例外を画面に出すときの文。利用者向けに書いた文なら、そのまま返す。そうでなければ、例外の文（英語やプログラムの
+    言葉、ファイルの場所）を出さず、何が起きたかの要旨と、診断情報の案内を返す（VA Case の errors.describe と同じ考え方）。"""
+    if is_for_user(e):
+        return str(e)
+    if isinstance(e, PermissionError):
+        text = "ほかのソフトがファイルを開いているか、読み書きする権限がありません。"
+    elif isinstance(e, FileNotFoundError):
+        text = "ファイルかフォルダが見つかりません。"
+    elif isinstance(e, OSError):
+        text = "ファイルかフォルダを読み書きできませんでした。"
+    else:
+        text = "予期しない誤りが起きました。"
+    return f"{text}\n{DIAGNOSTICS_HINT}"

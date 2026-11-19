@@ -56,7 +56,7 @@ def from_image(im, jpeg=None):
         im = ImageOps.exif_transpose(im)
         im.load()
     except Exception as e:      # 壊れたファイルなど
-        raise NotImage(str(e)) from e
+        raise NotImage("画像として読めないファイルです。") from e
     if im.mode in ("RGBA", "LA", "PA") or (im.mode == "P" and "transparency" in im.info):
         im = im.convert("RGBA")
         bg = Image.new("RGB", im.size, (255, 255, 255))
@@ -79,7 +79,7 @@ def from_bytes(data):
     try:
         im = Image.open(io.BytesIO(data))
     except Exception as e:
-        raise NotImage(str(e)) from e
+        raise NotImage("画像として読めないファイルです。") from e
     return from_image(im)
 
 

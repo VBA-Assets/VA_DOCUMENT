@@ -772,7 +772,7 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
             modified = self.session.is_modified(self.real_text())
         except Exception:
             modified = True
-        self.title(f"{'＊' if modified else ''}{name} - {APP_NAME} {VERSION_LABEL}")
+        self.title(f"{'＊' if modified else ''}{name} - {APP_NAME}")
         # 確認表示の上に PDF、エディターの上に構文ファイルの名前と版を出す（2026-10-24 班長指示）。文書ID は
         # 構文ファイルの名前（<文書ID>.vamd）。保存するまではどちらもないので、そう書く
         s = self.session

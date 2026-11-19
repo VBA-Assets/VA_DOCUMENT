@@ -21,6 +21,10 @@ LINE_SPACING_RANGE = (6, 15)    # 同じく行の間隔（ポイント。6 よ�
 
 
 def config_path():
+    # 試験のときは、環境変数 VA_DOCUMENT_CONFIG_DIR で置き場所を替える（班長の設定に書かないため。標準 02「設定ファイル」）
+    override = os.environ.get("VA_DOCUMENT_CONFIG_DIR")
+    if override:
+        return Path(override) / "settings.json"
     base = os.environ.get("APPDATA")
     if base:
         return Path(base) / "VA Document" / "settings.json"
