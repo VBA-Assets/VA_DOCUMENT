@@ -190,6 +190,7 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
                     self.bind(f"<{mod}-Key-{k}>", lambda e: (command(), "break")[1])
         key("o", self.on_open)
         key("s", self.on_save)
+        key("w", self.on_close_document)     # ［閉じる］（Word と同じ Ctrl+W。標準 02「メニュー」。2026-11-21 班長決定）
         key("p", self.on_print)
         key("f", lambda: self.on_find(False))
         key("h", lambda: self.on_find(True), mac=False)
@@ -318,7 +319,9 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
         # ［閉じる］は今の文書を閉じて新しい文書にする（VA Document は終わらない）。［オプション］（構文ファイルの
         # 保存場所とエディターの見た目。2026-10-24 班長指示）は、リボンに置かず、メニューバーの「ファイル」からだけ開く
         # （2026-11-14 班長指示。_build_menu）
-        g.small("閉じる", self.on_close_document)
+        # ［新規作成］は置かない。起動したときから新しい文書があり、書き終えたら［閉じる］で新しい文書に戻す。白紙のまま
+        # 変えていない間は、［閉じる］を押せない（標準 02「メニュー」。2026-11-21 班長決定）
+        self.close_button = g.small("閉じる", self.on_close_document)
         # 過去の文書を使い回す［コピーとして開く］［名前を付けて保存］は置かない（2026-10-25 班長決定。仕様.md の9.4）
         # 文書の種類・ページ番号の選択欄と、行番号・番号1字のチェックは「レイアウト」の組、文字列に記号を付けるボタンは
         # 「書式」の組にする（2026-10-25 班長指示で1つの「書式」の組から分け、2026-10-27 班長指示で［見出し］［箇条書き］
@@ -501,11 +504,12 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
         # 「…」は画面が開くもの
         f.add_command(label="開く…", command=lambda: self.on_open(), accelerator="Ctrl+O")
         f.add_command(label="保存", command=lambda: self.on_save(), accelerator="Ctrl+S")
-        f.add_command(label="閉じる", command=lambda: self.on_close_document())
+        f.add_command(label="閉じる", command=lambda: self.on_close_document(), accelerator="Ctrl+W")
         f.add_separator()
         f.add_command(label="オプション…", command=lambda: self.on_options())
         bar.add_cascade(label="ファイル", menu=f)
         self.file_menu = f
+        self._update_close_state()
         h = tk.Menu(bar, tearoff=False)
         h.add_command(label="診断情報をコピー", command=self.on_copy_diagnostics)
         h.add_separator()
@@ -773,6 +777,7 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
         except Exception:
             modified = True
         self.title(f"{'＊' if modified else ''}{name} - {APP_NAME}")
+        self._update_close_state()
         # 確認表示の上に PDF、エディターの上に構文ファイルの名前と版を出す（2026-10-24 班長指示）。文書ID は
         # 構文ファイルの名前（<文書ID>.vamd）。保存するまではどちらもないので、そう書く
         s = self.session
@@ -787,6 +792,24 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
         self.doc_id_label.configure(text=f"構文（VAMD）ファイル：{s.vamd_path.name}"
                                     if s.version else f"構文（VAMD）ファイル：{none}")
         self.copy_path_button.configure(state="normal" if s.version else "disabled")
+
+    def is_blank(self):
+        """白紙のまま変えていない新しい文書か（保存したことがなく、エディターが空。［閉じる］を押せない。標準 02「メニュー」。
+        2026-11-21 班長決定）。"""
+        s = self.session
+        return s.pdf_path is None and s.saved_text is None and not self.raw_text().strip()
+
+    def _update_close_state(self):
+        # 組み立ての途中（エディター・ボタン・メニューがまだない）なら、後で呼ばれたときに合わせる。Tk を継いだ画面の
+        # getattr はない属性を Tk に回すので、自分の属性だけを見る
+        own = self.__dict__
+        if "text" not in own:
+            return
+        state = "disabled" if self.is_blank() else "normal"
+        if own.get("close_button") is not None:
+            own["close_button"].configure(state=state)
+        if own.get("file_menu") is not None:
+            own["file_menu"].entryconfigure("閉じる", state=state)
 
     def _fit_pdf_name(self):
         """PDF の名前が行に入りきらないときは、後ろを「…」で省き、マウスを重ねると全体を出す（［印刷］とページの番号を

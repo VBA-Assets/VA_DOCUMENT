@@ -147,6 +147,8 @@ class FileMixin:
         """今の文書を閉じて、新しい文書にする（Word の「閉じる」。VA Document は終わらない。2026-10-24 班長指示）。
         保存していない変更があれば尋ねる。仮名化した語の一覧（実名と記号の対応）が消えることは確かめない（保存した
         文書は、開き直せば構文ファイルと PDF を突き合わせて作り直せる。2026-10-27 班長指示）。"""
+        if self.is_blank():             # 白紙のまま変えていない（押せない。Ctrl+W で来たとき）
+            return False
         if not self._confirm_discard():
             return False
         self.session.new()

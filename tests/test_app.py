@@ -1924,6 +1924,32 @@ def test_options_change_folder_and_editor(window, tmp_path, monkeypatch):
     window._apply_editor_prefs()
 
 
+def test_close_is_disabled_while_blank(window, monkeypatch):
+    """白紙のまま変えていない間は、［閉じる］（メニューとリボン）を押せない。字を書けば押せ、Ctrl+W で閉じる（標準 02
+    「メニュー」。2026-11-21 班長決定）。［新規作成］は置かない。"""
+    monkeypatch.setattr(messagebox, "askyesnocancel", lambda *a, **k: False)   # 保存しない
+    window.on_close_document()
+    window.text.delete("1.0", "end")
+    window.on_text_modified()
+    window._update_title()
+    f = window.file_menu
+    labels = [f.entrycget(i, "label") for i in range(f.index("end") + 1) if f.type(i) == "command"]
+    assert "新規作成" not in labels
+    assert window.is_blank()
+    assert f.entrycget("閉じる", "state") == "disabled" and str(window.close_button.cget("state")) == "disabled"
+    assert not window.on_close_document()                          # 白紙のままなら何もしない
+    window.text.insert("end", "字。")
+    window.text.edit_modified(True)
+    window.on_text_modified()
+    assert f.entrycget("閉じる", "state") == "normal" and str(window.close_button.cget("state")) == "normal"
+    window.text.focus_force()
+    window.update()
+    window.text.event_generate("<Control-Key-w>")           # エディターの中で押しても、字を消さずに閉じる
+    window.update()
+    assert window.raw_text() == "" and window.is_blank()
+    assert f.entrycget("閉じる", "state") == "disabled"
+
+
 def test_close_document_starts_new_one(window, monkeypatch):
     """［閉じる］は今の文書を閉じて新しい文書にする（VA Document は終わらない）。保存していない変更があれば尋ねる。"""
     asked = []
@@ -2954,7 +2980,7 @@ def test_help_menu(window, monkeypatch):
     f = window.file_menu
     assert [f.type(i) if f.type(i) == "separator" else f.entrycget(i, "label") for i in range(f.index("end") + 1)] == \
         ["開く…", "保存", "閉じる", "separator", "オプション…"]
-    assert [f.entrycget(i, "accelerator") for i in range(3)] == ["Ctrl+O", "Ctrl+S", ""]
+    assert [f.entrycget(i, "accelerator") for i in range(3)] == ["Ctrl+O", "Ctrl+S", "Ctrl+W"]
     # どの項目も、リボンのボタンと同じ操作を呼ぶ
     called = []
     for name in ("on_open", "on_save", "on_print", "on_options", "on_close_document"):
