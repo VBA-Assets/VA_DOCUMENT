@@ -441,6 +441,36 @@ def test_save_asks_when_vamd_changed_outside(window, tmp_path, monkeypatch):
     assert not window.session.vamd_changed_outside()
 
 
+def test_check_outside_while_tk_internal_part_holds_input(window, tmp_path, monkeypatch):
+    """選択欄の一覧のような、Tk の中だけの部品が入力を握っている間は、外で書き換えられたかを見に行かず、誤りにもしない
+    （grab_current が KeyError になっていた。2026-11-24、班長の PC の誤りの記録で見つけた）。握る部品がなくなれば見に行く。"""
+    window.session.pdf_path = tmp_path / "準備書面.pdf"
+    assert window.on_save()
+    _change_outside(window, "争う。", "否認する。")
+    asked = []
+    monkeypatch.setattr(ai_ops, "ChangedOutsideDialog",
+                        lambda parent, at_save: asked.append(at_save) or type("D", (), {"result": None})())
+    window.deiconify()
+    window.tk.eval("toplevel .vamd_test_grab; wm geometry .vamd_test_grab 50x50")    # Python の側にない部品
+    window.update()
+    # 画面を出したときに予約された見回りは、ここで止めて、記録も消す（確かめるのは、この後に呼ぶ見回り）
+    if window._focus_job is not None:
+        window.after_cancel(window._focus_job)
+        window._focus_job = None
+    window._declined_stamp = None
+    asked.clear()
+    try:
+        window.tk.eval("grab set .vamd_test_grab")
+        window._check_outside()                         # 誤りにならず、見に行かない
+        assert not asked
+    finally:
+        window.tk.eval("grab release .vamd_test_grab; destroy .vamd_test_grab")
+        window.update()
+    window._check_outside()
+    assert asked == [False]
+    window.withdraw()
+
+
 def test_find_and_replace(window):
     """検索と置換（Ctrl+F・Ctrl+H）。すべて置換は Ctrl+Z 1回で戻る。"""
     # ［検索］では置換の欄とボタンを出さず、［置換］では出す。開いたまま切り替わる（2026-10-25 班長指摘）

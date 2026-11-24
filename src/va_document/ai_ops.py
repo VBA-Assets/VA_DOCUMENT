@@ -384,7 +384,10 @@ class AiMixin:
 
     def _check_outside(self):
         self._focus_job = None
-        if self._checking_outside or self.grab_current() is not None:
+        # 確認の画面・メニュー・選択欄の一覧を開いている間（入力を握る部品があるとき）は、見に行かない。握っている部品は、
+        # 名前の字だけで確かめる（grab_current は部品を探すので、選択欄の一覧のような Tk の中だけの部品だと KeyError に
+        # なっていた。2026-11-24、班長の PC の誤りの記録で見つけた。Ver304 からあった）
+        if self._checking_outside or self.tk.call("grab", "current"):
             return
         try:
             if not self.session.vamd_changed_outside() or self.session.outside_stamp() == self._declined_stamp:
