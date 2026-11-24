@@ -125,7 +125,8 @@ def test_import_answer(session, tmp_path):
     assert "否認する。" in text and "甲野太郎" in text
 
 
-def test_open_foreign_pdf_as_plain_text(session, tmp_path):
+def test_open_foreign_pdf(session, tmp_path):
+    """ほかのソフトで作った PDF も開ける（字の位置からマークダウンにする。tests/test_pdfmarkdown.py）。"""
     import pdfcheck
 
     def draw(c):

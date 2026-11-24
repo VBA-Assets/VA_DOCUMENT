@@ -17,6 +17,7 @@ from .cleanup import clean_lines
 from .doctypes import doc_type_for
 from .document import IMAGE_MAX, image_numbers, parse
 from .layout import Typesetter
+from .pdfmarkdown import convert as pdf_to_markdown
 from .pdftext import plain_text as pdf_plain_text
 from .pdfwriter import pdf_bytes, read_id, read_images, write_pdf
 from .pseudonym import Dictionary, NotRegistrable, tokens_in, trim_selection
@@ -29,6 +30,7 @@ class OpenResult:
     text: str                                   # 入力欄に入れる文章（求まらない記号は記号のまま）
     recovery: Recovery = None                   # 構文ファイルから開いたときの突き合わせの結果
     messages: list = field(default_factory=list)  # 利用者に知らせること
+    error: Exception = None                     # PDF の見出し・配置を読み取れなかったときの誤り（誤りの記録に残す）
 
     @property
     def unresolved(self):
@@ -61,11 +63,15 @@ class Session:
         self.cfg = cfg
         self.new()
 
+    def _default_settings(self):
+        """新しい文書の設定（この PC の設定の、文書の種類・ページ番号・行番号・番号1字）。"""
+        return vamd.Settings(self.cfg.doc_type, self.cfg.page_number, self.cfg.line_numbers,
+                             self.cfg.one_width).normalized()
+
     def new(self):
         self.doc_id = vamd.new_doc_id()
         self.version = 0
-        self.settings = vamd.Settings(self.cfg.doc_type, self.cfg.page_number, self.cfg.line_numbers,
-                                      self.cfg.one_width).normalized()
+        self.settings = self._default_settings()
         self.dictionary = Dictionary()
         # AI への指示：すべての文書に共通（ユーザーによってオプションで書き換えられた指示。None なら既定の指示。
         # 2026-10-28 班長決定。開いた構文ファイルの指示は使わない）
@@ -417,21 +423,37 @@ class Session:
     def open_pdf(self, path):
         """PDF を開く。VA Documentの PDF で構文ファイルが見つかれば、それを開く。
 
-        構文ファイルが見つからない PDF・ほかのソフトで作った PDF は、文字を取り出して素の文章にする
-        （見出し・配置は戻さない）。
+        構文ファイルが見つからない PDF・ほかのソフトで作った PDF は、字の位置と番号から、見出し・配置・表などを戻した
+        マークダウンにする（pdfmarkdown.py。VA疑似アウトラインの機能を取り込んだもの。2026-11-24 班長指示）。文書の種類・
+        ページ番号・行番号の設定も、PDF に合わせる。新しい文書として開き、保存すると PDF と構文ファイルを作る（開いた
+        PDF は書き換えない）。読み取りに失敗したときは、前の版と同じく、字だけを取り出す（失敗は OpenResult.error）。
         """
         pid = read_id(str(path))
         found = self.find_vamd(pid[0]) if pid else None
         if found is not None:
             return self.open_vamd(found, path)
-        text = pdf_plain_text(path)
+        error = converted = None
+        try:
+            converted = pdf_to_markdown(path, self._default_settings())
+            text = converted.text if converted is not None else ""
+        except Exception as e:      # 読み取れない形の PDF でも、字だけは取り出せるように
+            error = e
+            text = pdf_plain_text(path)
         if not text.strip():
             # 字の層のない PDF（OCR していないスキャンなど）は、今の文書を消さずに知らせる（2026-10-24）
             raise NoTextInPdf("この PDF には、取り出せる字がありません（スキャンした画像だけで、OCR の字が入っていません）。\n"
                               "スキャンのソフトで OCR（ScanSnap なら「検索可能な PDF にする」）をしてから、もう一度開いてください。")
         self.new()
-        msg = ("この PDF の構文ファイルが見つかりません。" if pid else "VA Documentで作った PDF ではありません。")
-        return OpenResult(text, None, [msg + "文字だけを取り出しました（見出し・配置は戻していません）。"])
+        msg = "この PDF の構文ファイルが見つかりません。" if pid else "VA Document で作った PDF ではありません。"
+        if converted is None:
+            return OpenResult(text, None, [msg + "文字だけを取り出しました（見出し・配置は戻していません）。"], error)
+        self.settings = converted.settings
+        msg += (f"字の位置と番号から、見出し・配置・表などを戻しました（文書の種類：{self.doc_type.label}）。\n"
+                "元の PDF と見比べて、確かめてください。保存すると、PDF の保存先を尋ね、PDF と構文ファイルを作ります"
+                "（開いた PDF は書き換えません）。")
+        if converted.images:
+            msg += "\nこの PDF の画像は取り込んでいません。要る画像は、［画像］で入れてください。"
+        return OpenResult(text, None, [msg])
 
     def open_text(self, path):
         """テキスト・マークダウンを開く（素材の取り込み用。新しい文書になる）。"""

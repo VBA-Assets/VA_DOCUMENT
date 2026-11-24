@@ -1,4 +1,6 @@
 """PDF の字を読む（構文ファイルとの突き合わせ〔recover.py〕と、構文ファイルのない PDF の取り込み〔session.open_pdf〕）。
+構文ファイルのない PDF は、ふつうは pdfmarkdown.py でマークダウンにする。plain_text は、それが読み取りに失敗したとき
+だけ使う（2026-11-24）。
 
 pdfplumber（MIT。pdfminer.six）を使う。外部と通信しない。Ver300（2026-11-14 班長決定）で、PyMuPDF（AGPL-3.0）から
 替えた（VA Document を MIT License にするため）。

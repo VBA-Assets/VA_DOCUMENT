@@ -3548,3 +3548,16 @@ def test_navigation_keys_and_menu(nav_window, monkeypatch):
     assert w.text.index("insert") == "1.0"
     w.nav_menu.invoke("レベルを下げる")
     assert w.raw_text() == "## 一\n### 二\n本文"
+
+
+def test_open_pdf_without_vamd_makes_markdown(window, monkeypatch):
+    """構文ファイルのない PDF（VA公用文〔Word〕で作ったもの）を開くと、見出し・配置を戻したマークダウンがエディターに入り、
+    文書の種類・ページ番号の欄も PDF に合わせる（2026-11-24 班長指示「VA疑似アウトラインの機能を取り込む」）。"""
+    shown = []
+    monkeypatch.setattr(messagebox, "showinfo", lambda *a, **k: shown.append(a[1]))
+    window.session = app.Session(config.AppConfig(vamd_folder=window.cfg.vamd_folder, doc_type="Business"))
+    window.open_path(Path(__file__).parent / "data" / "裁判所" / "VA公用文.pdf")
+    lines = window.raw_text().splitlines()
+    assert lines[3] == ":=: 準備書面（１）" and "# 請求原因に対する認否" in lines
+    assert window.doc_type_box.get() == "裁判所提出書類" and window.page_number_box.get() == "中下"
+    assert len(shown) == 1 and "裁判所提出書類" in shown[0]

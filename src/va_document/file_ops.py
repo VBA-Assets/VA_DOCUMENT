@@ -98,6 +98,8 @@ class FileMixin:
             return
         if result is None:
             return
+        if result.error is not None:
+            self.errors.record(result.error, "PDF の読み取り")      # 字だけを取り出して開いた（型と場所だけを残す）
         text = result.text
         if result.unresolved:
             answers = MissingDialog(self, self.session, result).answers
