@@ -14,16 +14,18 @@ from .pdfwriter import FontNotEmbeddable
 from .pseudonym import TOKEN_RE
 from .recover import PdfMismatch
 
-# ［開く］の画面のファイルの種類。最初のものが既定。開けるものをまとめて出し、Word・Excel など開けないファイル
-# （テキストとして読むと文字化けする）は出さない（2026-10-27 班長決定。「すべてのファイル」を既定にする案と比べた）
+# ［開く］の画面のファイルの種類。最初のものが既定。開けるものをまとめて出し、Excel など開けないファイル
+# （テキストとして読むと文字化けする）は出さない（2026-10-27 班長決定。「すべてのファイル」を既定にする案と比べた）。
+# Word の文書（.docx）は Ver420 から（2026-11-24 班長指示。古い形式の .doc は開けない）
 OPEN_FILETYPES = [
-    ("開けるファイル（構文ファイル・書式付きファイル・テキスト・マークダウン）", f"*{vamd.EXTENSION} *.pdf *.txt *.md"),
-    ("VA Document（構文ファイル・書式付きファイル）", f"*{vamd.EXTENSION} *.pdf"), ("テキスト・マークダウン", "*.txt *.md"),
-    ("すべてのファイル", "*.*")]
+    ("開けるファイル（構文ファイル・書式付きファイル・Word の文書・テキスト・マークダウン）",
+     f"*{vamd.EXTENSION} *.pdf *.docx *.txt *.md"),
+    ("VA Document（構文ファイル・書式付きファイル）", f"*{vamd.EXTENSION} *.pdf"), ("Word の文書", "*.docx"),
+    ("テキスト・マークダウン", "*.txt *.md"), ("すべてのファイル", "*.*")]
 
 
 # エクスプローラーから落として開けるファイルの拡張子（［開く］の「開けるファイル」と同じ）
-DROP_SUFFIXES = (vamd.EXTENSION, ".pdf", ".txt", ".md")
+DROP_SUFFIXES = (vamd.EXTENSION, ".pdf", ".docx", ".txt", ".md")
 # 落としたファイルの一覧（tkdnd の文字列。空白を含むパスは {} で囲まれる）
 _DROP_PATH_RE = re.compile(r"\{([^}]*)\}|(\S+)")
 
@@ -59,14 +61,16 @@ class FileMixin:
 
     def open_dropped(self, paths):
         """落としたファイルを開く（［開く］と同じ。保存していない変更があれば、先に尋ねる）。開くのは1つだけで、
-        2つ以上・フォルダ・開けない種類（Word など。テキストとして読むと文字化けする）は開かずに知らせる。"""
+        2つ以上・フォルダ・開けない種類（Excel・古い形式の Word〔.doc〕など。テキストとして読むと文字化けする）は開かずに
+        知らせる。"""
         if len(paths) != 1:
             messagebox.showinfo(APP_NAME, "開くファイルを1つだけ落としてください。", parent=self)
             return
         path = Path(paths[0])
         if path.is_dir() or path.suffix.lower() not in DROP_SUFFIXES:
             messagebox.showinfo(APP_NAME, f"このファイルは開けません：{path.name}\n開けるのは、構文ファイル（{vamd.EXTENSION}）・"
-                                "書式付きファイル（.pdf）・テキスト（.txt）・マークダウン（.md）です。", parent=self)
+                                "書式付きファイル（.pdf）・Word の文書（.docx）・テキスト（.txt）・マークダウン（.md）です。",
+                                parent=self)
             return
         if not self._confirm_discard():
             return
@@ -86,6 +90,12 @@ class FileMixin:
                 result = self._open_vamd(path)
             elif suffix == ".pdf":
                 result = self.session.open_pdf(path)
+            elif suffix == ".docx":
+                result = self.session.open_docx(path)
+            elif suffix == ".doc":
+                messagebox.showinfo(APP_NAME, "古い形式の Word の文書（.doc）は開けません。Word で開き、［名前を付けて保存］で"
+                                    "「Word 文書（*.docx）」を選んで保存し直してから、開いてください。", parent=self)
+                return
             else:
                 result = self.session.open_text(path)
         except vamd.NoSeparator as e:

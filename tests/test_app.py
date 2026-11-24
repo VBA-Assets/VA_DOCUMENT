@@ -319,8 +319,8 @@ def test_save_and_import(window, tmp_path, monkeypatch):
 
 
 def test_open_dialog_lists_all_openable_files_first(window, tmp_path, monkeypatch):
-    """［開く］の画面の既定のファイルの種類は、構文ファイル・PDF・テキスト・マークダウンをまとめた「開けるファイル」
-    （2026-10-27 班長決定）。選んだマークダウンは、そのまま開く。"""
+    """［開く］の画面の既定のファイルの種類は、構文ファイル・PDF・Word の文書（Ver420 から）・テキスト・マークダウンを
+    まとめた「開けるファイル」（2026-10-27 班長決定）。選んだマークダウンは、そのまま開く。"""
     md = tmp_path / "見本.md"
     md.write_text("# 認否\n認める。\n", encoding="utf-8")
     seen = {}
@@ -333,7 +333,7 @@ def test_open_dialog_lists_all_openable_files_first(window, tmp_path, monkeypatc
     window.on_open()
     first = seen["filetypes"][0]
     assert first[0].startswith("開けるファイル")
-    assert set(first[1].split()) == {"*.vamd", "*.pdf", "*.txt", "*.md"}
+    assert set(first[1].split()) == {"*.vamd", "*.pdf", "*.docx", "*.txt", "*.md"}
     assert ("すべてのファイル", "*.*") in seen["filetypes"]
     assert window.text.get("1.0", "end-1c").rstrip("\n") == "# 認否\n認める。"
 
@@ -351,11 +351,11 @@ def test_drop_file_from_explorer(window, tmp_path, monkeypatch):
     monkeypatch.setattr(messagebox, "askyesnocancel", lambda *a, **k: asked.append(a[1]) or False)
     md = tmp_path / "落とした 文書.md"           # 空白を含む名前（tkdnd は {} で囲む）
     md.write_text("# 認否\n認める。", encoding="utf-8")
-    other = tmp_path / "書面.docx"
+    other = tmp_path / "一覧.xlsx"
     other.write_bytes(b"PK")
     for data in (f"{{{md}}} {{{md}}}", f"{{{tmp_path}}}", str(other)):
         window.open_dropped(file_ops.dropped_paths(data))
-    assert len(shown) == 3 and "1つだけ" in shown[0] and "開けません" in shown[1] and "書面.docx" in shown[2]
+    assert len(shown) == 3 and "1つだけ" in shown[0] and "開けません" in shown[1] and "一覧.xlsx" in shown[2]
     assert not asked and window.raw_text() == PSEUDO            # どれも、エディターは変わらない
     window.open_dropped(file_ops.dropped_paths(f"{{{md}}}"))
     assert asked                                                # 保存していない変更があるので、先に尋ねた
@@ -3548,6 +3548,28 @@ def test_navigation_keys_and_menu(nav_window, monkeypatch):
     assert w.text.index("insert") == "1.0"
     w.nav_menu.invoke("レベルを下げる")
     assert w.raw_text() == "## 一\n### 二\n本文"
+
+
+def test_open_docx(window, monkeypatch, tmp_path):
+    """Word の文書（.docx）を開くと、見出し・配置・画像を戻したマークダウンがエディターに入り、画像はプレビューに出て、
+    取り込まなかったものを知らせる（Ver420。2026-11-24 班長指示）。古い形式の .doc は開かずに知らせる。"""
+    from docxbuild import docx, p, pic, png, sect, t
+    shown = []
+    monkeypatch.setattr(messagebox, "showinfo", lambda *a, **k: shown.append(a[1]))
+    monkeypatch.setattr(messagebox, "askyesnocancel", lambda *a, **k: False)
+    src = tmp_path / "書面.docx"
+    src.write_bytes(docx(p(t("準備書面"), '<w:jc w:val="center"/>') + p(t("当事者"), '<w:pStyle w:val="1"/>')
+                         + p(pic(5)) + sect(), comments=["メモ"], images={"rIdImg": ("image1.png", png())}))
+    window.open_path(src)
+    assert window.raw_text().rstrip("\n").splitlines() == [":=: 準備書面", "# 当事者", "[IMAGE 1]{12}"]
+    # 見出しのレベルがあり、用紙が VA Document の種類に合わない文書は、今の設定の文書の種類（この試験の設定は裁判所提出書類）
+    assert window.session.images[1].size == (200, 100) and window.doc_type_box.get() == "裁判所提出書類"
+    assert len(shown) == 1 and "Word の文書から" in shown[0] and "コメント 1 個" in shown[0] and "画像 1 個" in shown[0]
+    old = tmp_path / "古い.doc"
+    old.write_bytes(b"\xd0\xcf\x11\xe0")
+    window.open_path(old)
+    assert "古い形式" in shown[-1] and window.raw_text().startswith(":=: 準備書面")
+    assert ("Word の文書", "*.docx") in file_ops.OPEN_FILETYPES and ".docx" in file_ops.DROP_SUFFIXES
 
 
 def test_open_pdf_without_vamd_makes_markdown(window, monkeypatch):

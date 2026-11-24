@@ -22,6 +22,10 @@
 ・ページ番号（ページの上下の端の数字だけの行）・行番号（左の余白の小さい数字）は、字から除き、文書の設定（ページ番号の
   位置・行番号）に戻す。
 戻さないもの：画像、傍点・蛍光ペン・均等割付、表の列の幅・2重線、ヘッダー・フッター（本文の字として残す）、目次（字として残す）。
+
+Word の文書（.docx）の取り込み（docxmarkdown.py。Ver420）も、段落をここの Block にして、同じ to_markdown でマークダウンに
+する。Word の文書は、見出しのレベル・番号（Block.level・list_kind・label）、傍点・蛍光ペン（字の書式）、画像の行（IMAGE）を
+持つ。
 """
 import copy
 import io
@@ -37,12 +41,14 @@ from .doctypes import (DOC_TYPES, MM, PAGE_NUMBER_BOTTOM_CENTER, PAGE_NUMBER_BOT
                        PAGE_NUMBER_BOTTOM_RIGHT, PAGE_NUMBER_NONE, PAGE_NUMBER_TOP_RIGHT, TITLE_CENTER, TITLE_JUSTIFY,
                        WEB, doc_type_for)
 from .document import (AREA_MARK_RE, HEADING_MARK_RE, IMAGE_RE, LEFT_INDENT_RE, LIST_MARK_RE, is_line_mark,
-                       is_table_line, split_lead_marks)
+                       is_table_line, split_inline_full, split_lead_marks)
 from .pdftext import _kangxi
 from .pseudo_outline import BULLET, COMPOSITE, HEADING, NUMBER, Mark, Outliner, same_form
 
-# 段落の種類（Block.kind）
-TEXT, TABLE, PAGE_BREAK = "text", "table", "pagebreak"
+# 段落の種類（Block.kind）。IMAGE は画像の行（Word の文書の取り込み。docxmarkdown.py）
+TEXT, TABLE, PAGE_BREAK, IMAGE = "text", "table", "pagebreak", "image"
+# 字の書式（Row.chars の (字, 書式) の書式。PDF は太字だけを読むので True/False。Word の文書は傍点・蛍光ペンも持つ）
+BOLD, DOTS, HIGHLIGHT = 1, 2, 4
 # 行の配置（Block.align）
 LEFT, CENTER, RIGHT = "left", "center", "right"
 
@@ -72,7 +78,8 @@ class Row:
     left: float             # 空白でない最初の字の左端
     right: float            # 空白でない最後の字の右端
     size: float             # 字の大きさ（行の中でいちばん多いもの）
-    chars: list             # [(字, 太字か)]（字の間の広いあきは、全角空白・半角空白にしてある）
+    chars: list             # [(字, 書式)]（書式は太字か〔PDF〕か、BOLD・DOTS・HIGHLIGHT の和〔Word〕。字の間の広いあきは、
+                            # 全角空白・半角空白にしてある）
     pdf_chars: list = None  # PDF の字（描いた空白を含む。左から）
 
     @property
@@ -91,6 +98,11 @@ class Block:
     align: str = LEFT
     first: float = 0.0      # 1行目の字下げ（左インデントからの字数）
     indent: float = 0.0     # 左インデント（本文の左端からの字数。2行目以降の頭の位置）
+    # Word の文書から取り込んだ段落だけ（docxmarkdown.py）。PDF は字の位置と番号から読むので、使わない
+    level: int = 0          # 見出しのレベル（Word の見出しのスタイル・アウトラインのレベル + 1）
+    list_kind: str = ""     # 見出しのレベルのない段落に Word が振った番号：BULLET か NUMBER
+    label: str = ""         # その番号の字（見出しの番号として読めるかを試す）
+    line: str = None        # IMAGE のとき、画像の行（[IMAGE n]{幅}）
 
     @property
     def chars(self):
@@ -479,23 +491,35 @@ def _set_align(b, left, right, pitch):
 
 # ---------- マークダウンにする ----------
 
+def _wrap(run, flags):
+    stars = ("**" if flags & BOLD else "") + ("*" if flags & DOTS else "")
+    high = "==" if flags & HIGHLIGHT else ""
+    return stars + high + run + high + stars
+
+
 def _inline(chars):
-    """[(字, 太字か)] を、太字を **字** で囲んだ文字列にする（前後の空白は囲まない）。"""
+    """[(字, 書式)] を、太字を **字**、傍点を *字*、蛍光ペンを ==字== で囲んだ文字列にする（前後の空白は囲まない。
+    間の空白は、前後が同じ書式なら囲む）。囲んだ文字列を読み直して字が元に戻らなければ（字の中の * などと重なるとき）、
+    その書式は付けない（利用者の字を変えない）。"""
     out, k = [], 0
     while k < len(chars):
-        if not chars[k][1] or chars[k][0].isspace():
+        flags = int(chars[k][1])
+        if not flags or chars[k][0].isspace():
             out.append(chars[k][0])
             k += 1
             continue
         j = k
-        while j < len(chars) and (chars[j][1] or chars[j][0].isspace()):
+        while j < len(chars) and (int(chars[j][1]) == flags or chars[j][0].isspace()):
             j += 1
         while j > k and chars[j - 1][0].isspace():
             j -= 1
         run = "".join(ch for ch, _ in chars[k:j])
-        out.append(f"**{run}**" if "*" not in run else run)
+        marked = _wrap(run, flags)
+        out.append(marked if "*" not in run and split_inline_full(marked).plain == run else run)
         k = j
-    return "".join(out)
+    line = "".join(out)
+    plain = "".join(ch for ch, _ in chars)
+    return line if split_inline_full(line).plain == plain else plain
 
 
 def _spaces(n):
@@ -572,6 +596,30 @@ def _caption(b, blocks, i, o, dt):
     return None
 
 
+def _source_mark(b, text, o):
+    """Word の文書から取り込んだ段落の、Word の見出しのレベル・番号による記号。(決めたか, Mark または None)。
+    Word の情報のない段落（PDF のすべての段落）は (False, None)：字の先頭の番号から読む。
+
+    ・見出しのレベルがある段落は、そのレベルの見出しにする。Word の自動の番号は、組むときに VA Document が付けるので
+      字にしない（2026-11-24 班長指摘）。字の先頭に、組んだときと同じ番号を手で打っていれば、その番号は外す。
+    ・見出しのレベルのない段落に Word が振った番号は、番号の字を付けて、全角・半角まで同じ見出しの番号として読めれば
+      見出しに（リストの番号で振った契約書の「第１条」など）、読めなければ箇条書き・段落番号にする（「1.」で振った箇条が、
+      裁判所提出書類の「１」の見出しにならないように）。
+    ・右揃えの段落の後は、VA Document も見出しとして組まないので、記号にしない（document.parse と同じ）。"""
+    if not b.level and not b.list_kind:
+        return False, None
+    if o.stopped:
+        return True, None
+    if b.level:
+        typed = o.classify(text)
+        end = typed.end if typed is not None and typed.kind == HEADING and typed.level == b.level else 0
+        return True, Mark(HEADING, b.level, end)
+    typed = o.classify(b.label + text) if b.label else None
+    if typed is not None and typed.kind in (HEADING, COMPOSITE) and typed.exact:
+        return True, Mark(typed.kind, typed.level, max(0, typed.end - len(b.label)), True, typed.depth)
+    return True, Mark(b.list_kind, 0, 0)
+
+
 def to_markdown(layout, dt):
     """Layout を、文書の種類 dt の記号でマークダウンにする。(行のリスト, 記号にした数, 全角・半角も同じだった数)。"""
     o = Outliner(dt)
@@ -589,6 +637,10 @@ def to_markdown(layout, dt):
         for _ in range(b.blank if items else 0):
             items.append(_Item(lines=[""]))
             o.accept(None)
+        if b.kind == IMAGE:
+            items.append(_Item(lines=[b.line]))
+            o.accept(None)
+            continue
         chars = b.chars
         text = "".join(ch for ch, _ in chars)
         if _TOC_ENTRY_RE.search(text):
@@ -597,23 +649,25 @@ def to_markdown(layout, dt):
                 items.append(_Item(lines=["[TOC]"], toc=True))
             o.accept(None)
             continue
-        mark = o.classify(text) if not dt.web else _size_heading(b, sizes, o)
-        if (mark is None and items and items[-1].lines == ["<<<"] and o.seen and not dt.web):
-            # 改ページの後で、見出しの番号が振り直されていれば、セクション区切り
-            fresh = Outliner(dt)
-            again = fresh.classify(text)
-            if again is not None and again.kind in (HEADING, COMPOSITE):
-                items[-1].lines = ["<<<="]
-                o.section_break()
-                mark = o.classify(text)
-        if b.soft and mark is None and items and items[-1].block is not None:
-            # 番号らしいもので始まるので分けた行が、番号ではなかった：前の段落の続きに戻す
-            prev = items[-1]
-            prev.chars = _join_rows(prev.block.rows + b.rows)
-            prev.block = replace(prev.block, rows=prev.block.rows + b.rows)
-            continue
-        if mark is None and not o.stopped and not dt.web:
-            mark = _caption(b, layout.blocks, i, o, dt)
+        decided, mark = _source_mark(b, text, o)
+        if not decided:
+            mark = o.classify(text) if not dt.web else _size_heading(b, sizes, o)
+            if (mark is None and items and items[-1].lines == ["<<<"] and o.seen and not dt.web):
+                # 改ページの後で、見出しの番号が振り直されていれば、セクション区切り
+                fresh = Outliner(dt)
+                again = fresh.classify(text)
+                if again is not None and again.kind in (HEADING, COMPOSITE):
+                    items[-1].lines = ["<<<="]
+                    o.section_break()
+                    mark = o.classify(text)
+            if b.soft and mark is None and items and items[-1].block is not None:
+                # 番号らしいもので始まるので分けた行が、番号ではなかった：前の段落の続きに戻す
+                prev = items[-1]
+                prev.chars = _join_rows(prev.block.rows + b.rows)
+                prev.block = replace(prev.block, rows=prev.block.rows + b.rows)
+                continue
+            if mark is None and not o.stopped and not dt.web:
+                mark = _caption(b, layout.blocks, i, o, dt)
         lead = ""
         if mark is None:
             if not title_done and not o.seen and _is_title(b, layout, dt):

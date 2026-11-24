@@ -17,6 +17,9 @@ from .cleanup import clean_lines
 from .doctypes import doc_type_for
 from .document import IMAGE_MAX, image_numbers, parse
 from .layout import Typesetter
+from .docxmarkdown import DocxError
+from .docxmarkdown import convert as docx_to_markdown
+from .docxmarkdown import notices as docx_notices
 from .pdfmarkdown import convert as pdf_to_markdown
 from .pdftext import plain_text as pdf_plain_text
 from .pdfwriter import pdf_bytes, read_id, read_images, write_pdf
@@ -455,6 +458,34 @@ class Session:
             msg += "\nこの PDF の画像は取り込んでいません。要る画像は、［画像］で入れてください。"
         return OpenResult(text, None, [msg])
 
+    def open_docx(self, path):
+        """Word の文書（.docx）を開く（Ver420。2026-11-24 班長指示。docxmarkdown.py）。
+
+        PDF を開くのと同じく、新しい文書として開く（文書の使い回しの機能は作らない。2026-11-24 班長決定）。段落・見出し・
+        配置・表・改ページ・画像などを戻したマークダウンにし、文書の種類・ページ番号・行番号の設定も Word の文書に合わせる。
+        画像は、付加情報を除いて作り直し、メモリにだけ持つ（保存すると PDF に入る）。取り込まなかったもの（変更履歴の
+        削除した字・コメント・隠し文字・脚注・テキストボックスの字など）は、知らせる。開いた docx は書き換えない。"""
+        try:
+            converted = docx_to_markdown(Path(path).read_bytes(), self._default_settings())
+        except (DocxError, OSError):
+            raise
+        except Exception as e:      # 思わぬ形の文書：今の文書を消さずに知らせる（誤りの記録には型と場所を残す）
+            raise DocxError("この Word の文書は、読み取れない形です。Word で開き、［名前を付けて保存］で保存し直してから、"
+                            "もう一度開いてください。") from e
+        if not converted.text.strip():
+            raise NoTextInDocx("この Word の文書には、取り込める字がありません。")
+        self.new()
+        self.settings = converted.settings
+        self.images = dict(converted.pictures)
+        self._last_image = max(self.images, default=0)
+        msg = (f"Word の文書から、見出し・配置・表などを戻しました（文書の種類：{self.doc_type.label}）。\n"
+               "元の Word の文書と見比べて、確かめてください。保存すると、PDF の保存先を尋ね、PDF と構文ファイルを作ります"
+               "（開いた Word の文書は書き換えません）。")
+        notes = docx_notices(converted.report)
+        if notes:
+            msg += "\n\n" + "\n".join(notes)
+        return OpenResult(converted.text, None, [msg])
+
     def open_text(self, path):
         """テキスト・マークダウンを開く（素材の取り込み用。新しい文書になる）。"""
         raw = Path(path).read_bytes()
@@ -468,6 +499,10 @@ class Session:
 
 class NoTextInPdf(ValueError):
     """PDF に字の層がない（OCR していないスキャンなど）。"""
+
+
+class NoTextInDocx(ValueError):
+    """Word の文書に、取り込める字がない。"""
 
 
 def _stamp(path):
