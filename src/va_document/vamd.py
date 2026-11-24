@@ -16,7 +16,8 @@ from collections import Counter
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from .doctypes import DEFAULT_DOC_TYPE, DOC_TYPES, NAIYOU, PAGE_NUMBER_BOTTOM_CENTER, PAGE_NUMBER_LABELS, can_one_width
+from .doctypes import (DEFAULT_DOC_TYPE, DOC_TYPES, NAIYOU, PAGE_NUMBER_BOTTOM_CENTER, PAGE_NUMBER_LABELS, WEB,
+                       can_one_width)
 from .document import (BODY, JUSTIFY, cell_align_mark, image_mark, image_numbers, is_line_mark, move_wraps_after_marks,
                        parse, parse_separator, separator_widths, split_cells, split_lead_marks)
 from .pseudonym import tokens_in
@@ -115,8 +116,9 @@ class Settings:
     one_width: bool = False                      # 見出し番号を全角1字の幅に縮めるか（doctypes.one_width_type。2026-10-26 班長指示）
 
     def allows_line_numbers(self):
-        """行番号を付けられる文書の種類か（内容証明には付けない。2026-10-24 班長指示）。"""
-        return self.doc_type != NAIYOU
+        """行番号を付けられる文書の種類か（内容証明には付けない。2026-10-24 班長指示。ウェブ文書にも付けない。2026-11-24
+        班長決定）。"""
+        return self.doc_type not in (NAIYOU, WEB)
 
     def allows_one_width(self):
         """見出し番号を1字の幅にできる文書の種類か（契約書1・技術文書ではできない）。"""

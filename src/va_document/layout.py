@@ -72,6 +72,7 @@ class Glyph:
     dot: bool = False        # 傍点（*文字*。字の上に黒丸を付ける）
     pseudonym: bool = False  # 仮名化した語の字（確認表示だけで地に色を付ける。2026-10-24 班長指示）
     scale: float = 1.0       # 字の横の倍率（［番号1字］で見出しの番号を全角1字の幅に縮める。2026-10-26）
+    size: float = 1.0        # 字の大きさの倍率（文書の種類の字の大きさに掛ける。見出しの字を大きくする文書の種類）
 
 
 @dataclass
@@ -82,6 +83,8 @@ class Line:
     para_index: int = -1    # 何番目の段落の行か
     area: str = None        # ヘッダー・フッターの行なら HEADER・FOOTER
     y: float = None         # ヘッダー・フッターの行の基準線（用紙の上端から。ポイント）
+    size: float = 1.0       # 行の字の大きさの倍率（基準線の高さを決める。Glyph.size）
+    rule: bool = False      # 行の下に線を引くか（見出しの下の線。文書の種類の heading_rules）
 
 
 class Typesetter(BlockMixin):
@@ -92,6 +95,7 @@ class Typesetter(BlockMixin):
         繰り返し、ページの先頭に来た見出しの直前の空行を詰める（2026-10-28 班長決定。VA公用文はどれも行わないので、
         VA公用文と比べる試験では偽にする）。"""
         self.dt = dt
+        self.font_size = dt.font_size   # 字の大きさ（ポイント。VA公用文の7種類は 12）
         self.page_number = page_number
         self.keep = keep
         self.page_number_shift = {}     # ページ → ページ番号をずらす量（ヘッダー・フッターが余白に入りきらないとき）
@@ -118,8 +122,29 @@ class Typesetter(BlockMixin):
         return self.pitch / 2 if is_half(ch) else self.pitch
 
     def glyph_w(self, g):
-        """描いた字の幅（横の倍率を掛けたもの）。"""
-        return self.advance(g.ch) * g.scale
+        """描いた字の幅（横の倍率と、字の大きさの倍率を掛けたもの）。"""
+        return self.advance(g.ch) * g.scale * getattr(g, "size", 1.0)
+
+    def para_size(self, p):
+        """段落の字の大きさの倍率（見出しは文書の種類の heading_scale。H1 の見た目の表題は、# の見出しと同じ。ほかは 1）。"""
+        if p.kind == HEADING and p.level:
+            return self.dt.heading_scale[p.level - 1]
+        return self.dt.heading_scale[0] if self.h1_title(p) else 1.0
+
+    def h1_title(self, p):
+        """# の見出し（H1）と同じ見た目で組む表題か（ウェブ文書の :=: の段落。大きさ・太字・下の線を H1 と同じにする。
+        見出しとしては扱わない〔番号・ナビゲーション・右揃えの段落の後の決まりは、ほかの文書の種類と同じ〕。2026-11-24
+        班長指示）。"""
+        return self.dt.web and p.align == TITLE and p.kind != HEADING and not p.area
+
+    def heading_look(self, p):
+        """見出しの見た目（太字・大きさ・下の線）で組む段落か（ウェブ文書の見出しと、H1 の見た目の表題）。"""
+        return self.dt.web and (p.kind == HEADING or self.h1_title(p))
+
+    def heading_rule(self, p):
+        """段落の最後の行の下に線を引くか（文書の種類の heading_rules のレベルの見出しと、H1 の見た目の表題）。"""
+        level = p.level if p.kind == HEADING else 1 if self.h1_title(p) else 0
+        return bool(level) and level in self.dt.heading_rules
 
     def squeeze_items(self, s):
         """番号を全角1字の幅に収めた (字, 送り幅) の列。括弧の番号（「(3)」「（ア）」）は、括弧をそれぞれ 1/4 字、中の字に
@@ -144,11 +169,14 @@ class Typesetter(BlockMixin):
         """英数字の語を作る字（半角で、空白でないもの）か。均等割付の字の並び（2字以上の項目）は語の字ではない。"""
         return len(ch) == 1 and is_half(ch) and ch != " "
 
-    def make_items(self, text, spans=(), limit=None):
+    def make_items(self, text, spans=(), limit=None, size=1.0):
         """(字, 送り幅) の列。均等割付（[字]{N}）の字は、1つの項目（字の並び, N 字の幅）にまとめる（途中で
         改行せず、両端揃えでも中の字間は変えない。字数より字が多いときは、割り付けずに字の幅のまま。2026-10-24）。
-        limit は組む幅（段落の1行・セルの中）。割り付ける幅は、これより広くしない（大きな字数を入れたとき）。"""
+        limit は組む幅（段落の1行・セルの中）。割り付ける幅は、これより広くしない（大きな字数を入れたとき）。
+        size は字の大きさの倍率（送り幅に掛ける。均等割付のない段落だけに使う）。"""
         items, k = [], 0
+        if size != 1.0:
+            return [(ch, self.advance(ch) * size) for ch in text]
         for start, end, n in sorted(spans):
             items += [(ch, self.advance(ch)) for ch in text[k:start]]
             s = text[start:end]
@@ -316,9 +344,12 @@ class Typesetter(BlockMixin):
         なら、番号（記号）も太字（蛍光ペン）にする（2026-10-24 班長指示）。傍点は番号には付けない。"""
         def whole(p, marked):
             return bool(marked) and all(k in marked for k, ch in enumerate(p.text) if not ch.isspace())
+        web = self.dt.web
         for ln in lines:
             p = paras[ln.para_index] if 0 <= ln.para_index < len(paras) else None
-            if p is None or not (p.bold or p.highlight or p.dots):
+            # ウェブ文書の見出し（と H1 の見た目の表題）は、Markdown のプレビューと同じく、字をすべて太字にする
+            heading_bold = p is not None and web and self.heading_look(p) and not ln.area
+            if p is None or not (p.bold or p.highlight or p.dots or heading_bold):
                 continue
             bold_all, mark_all = whole(p, p.bold), whole(p, p.highlight)
             for g in ln.glyphs:
@@ -327,6 +358,8 @@ class Typesetter(BlockMixin):
                 else:
                     k = g.index - len(p.number)
                     g.bold, g.highlight, g.dot = k in p.bold, k in p.highlight, k in p.dots
+                if heading_bold:
+                    g.bold = True
         for piece in self.tables:
             t = paras[piece.para_index].table
             for g in piece.glyphs:
@@ -401,13 +434,16 @@ class Typesetter(BlockMixin):
             number, right, broken = self._break_para(paras, pi, row)
             num_left = len(number)
             offset = len(p.number) - len(number)      # 字の番号は、この見出しの番号の1字目を 0 とする（前の番号は負）
-            for start_x, chars, hang, last, trail in broken:
+            size = self.para_size(p)
+            rule = self.heading_rule(p)
+            for k_line, (start_x, chars, hang, last, trail) in enumerate(broken):
                 num_here = min(num_left, len(chars))
                 placed = self.place_line(p.align, start_x, chars, hang, last, trail, num_here,
                                          right + self._wrap_extra(row))
-                glyphs = [Glyph(ch, x, k < num_here, offset + k) for k, (ch, x) in enumerate(placed)]
+                glyphs = [Glyph(ch, x, k < num_here, offset + k, size=size) for k, (ch, x) in enumerate(placed)]
                 self.place_number_glyphs(glyphs[:num_here], chars)
-                out.append(Line(row // self.lines_page + 1, row % self.lines_page, glyphs, pi))
+                out.append(Line(row // self.lines_page + 1, row % self.lines_page, glyphs, pi, size=size,
+                                rule=rule and k_line == len(broken) - 1))
                 offset += sum(len(ch) for ch, _ in chars)
                 num_left -= num_here
                 row += 1
@@ -427,7 +463,7 @@ class Typesetter(BlockMixin):
         left, first = left + merged * self.pitch, first - merged * self.pitch
         shift = len(number)
         items = self.make_items(number + p.text, [(a + shift, b + shift, n) for a, b, n in p.distribute],
-                                self.text_w - right - left - max(first, 0.0))
+                                self.text_w - right - left - max(first, 0.0), self.para_size(p))
         for a, b in squeeze:
             items[a:b] = self.squeeze_items(number[a:b])
         extra = (lambda k: self._wrap_extra(row + k)) if row is not None and self._wrap else None
@@ -565,7 +601,7 @@ class Typesetter(BlockMixin):
 
     def line_baseline(self, ln):
         """行の字の基準線（用紙の上端から）。ヘッダー・フッターの行も。"""
-        return ln.y if ln.area else self.baseline(ln.row)
+        return ln.y if ln.area else self.baseline(ln.row, ln.size)
 
     def line_box(self, ln):
         """行の (上端, 高さ)（用紙の上端から。確認表示とエディターの連動に使う）。"""
@@ -639,10 +675,11 @@ class Typesetter(BlockMixin):
             best = max(best, cur)
         return best
 
-    def baseline(self, row):
-        """その行の字の基準線の、用紙の上端からの位置（ポイント）。
+    def baseline(self, row, size=1.0):
+        """その行の字の基準線の、用紙の上端からの位置（ポイント）。size は字の大きさの倍率（大きくした見出しの行）。
 
         Word は、行の高さの真ん中に字の高さ（ＭＳ 明朝は上端から下端まで 1em、うち上端から基準線まで
         220/256 em）を置く（2026-10-23、VA公用文の PDF と 0.17pt 以内で一致）。
         """
-        return self.margin_top + row * self.line_pitch + (self.line_pitch - FONT_SIZE) / 2 + FONT_SIZE * 220 / 256
+        fs = self.font_size * size
+        return self.margin_top + row * self.line_pitch + (self.line_pitch - fs) / 2 + fs * 220 / 256

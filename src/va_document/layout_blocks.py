@@ -11,14 +11,14 @@ from dataclasses import dataclass, field
 from math import ceil
 
 from .document import CENTER, RIGHT, TITLE
-from .doctypes import FONT_SIZE, MM
+from .doctypes import MM
 
 # 表の値（仕様.md の5.3。Word に合わせ込まず、Word の既定に寄せた読みやすい値）
 CELL_PAD_X = 1.9 * MM           # セルの左右の余白（Word の既定 1.9mm）
 CELL_PAD_Y = 1.5                # セルの上下の余白（ポイント）
 # 傍点のある表の行は、上をこれだけ空ける（表の行は字の上の余白が狭く、黒丸が上の罫線に重なるため）
 DOT_ROW_EXTRA = 2.5
-CELL_LINE_PITCH = FONT_SIZE * 1.3  # セルの中の行送り（VA公用文が表に使う「行間詰め」の1行に近い値）
+CELL_LINE_RATIO = 1.3          # セルの中の行送り（字の大きさの倍。VA公用文が表に使う「行間詰め」の1行に近い値）
 # 画像（[IMAGE 1]{30}。2026-10-29 班長決定。検討_画像の挿入.md の7）
 WRAP_GAP = 1                    # 回り込ませる本文と画像の間（字。句読点のぶら下げを画像に重ねないため）
 WRAP_MIN = 10                   # 回り込む行の幅がこれ（字）に満たないときは回り込ませない
@@ -195,7 +195,7 @@ class BlockMixin:
             laid = [self.layout_cell(a, s, widths[k], t.distribute.get((ri, k), ())) for k, (a, s) in enumerate(cells)]
             n_lines = max([len(c) for c in laid] + [1])
             extra = DOT_ROW_EXTRA if any((ri, k) in t.dots for k in range(len(cells))) else 0
-            height = (n_lines * CELL_LINE_PITCH + 2 * CELL_PAD_Y + extra
+            height = (n_lines * self.font_size * CELL_LINE_RATIO + 2 * CELL_PAD_Y + extra
                       + (DOUBLE_RULE_GAP if ri == 0 and t.double_rule else 0))
             out.append((laid, extra, height))
         return widths, out
@@ -237,8 +237,9 @@ class BlockMixin:
             for k, lines in enumerate(laid):
                 ci = 0
                 for li, placed in lines:
-                    base = (y + CELL_PAD_Y + extra + li * CELL_LINE_PITCH + (CELL_LINE_PITCH - FONT_SIZE) / 2
-                            + FONT_SIZE * 220 / 256)
+                    fs = self.font_size
+                    base = (y + CELL_PAD_Y + extra + li * fs * CELL_LINE_RATIO + (fs * CELL_LINE_RATIO - fs) / 2
+                            + fs * 220 / 256)
                     for ch, x in placed:
                         piece.glyphs.append(TableGlyph(ch, col_x[k] + CELL_PAD_X + x, base, ri, k, ci))
                         ci += 1

@@ -12,12 +12,14 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .doctypes import DEFAULT_DOC_TYPE, DOC_TYPES, PAGE_NUMBER_BOTTOM_CENTER, PAGE_NUMBER_LABELS
-from .theme import EDITOR_FONT_SIZE, EDITOR_LINE_SPACING
+from .theme import EDITOR_FONT_SIZE, EDITOR_LINE_SPACING, NAV_FONT_SIZE, NAV_LINE_SPACING
 from .vamd import default_folder
 
 MAX_PDF_FOLDERS = 50
 FONT_SIZE_RANGE = (8, 20)       # オプションで選べるエディターの字の大きさ（ポイント）
 LINE_SPACING_RANGE = (6, 15)    # 同じく行の間隔（ポイント。6 より狭いと、エディターのカーソルの上の ▼ が行の間に入らない。2026-10-26 班長決定）
+# ナビゲーションの行の間隔（ポイント。一覧には ▼ を置かないので、0 まで狭められる。字の大きさはエディターと同じ範囲）
+NAV_LINE_SPACING_RANGE = (0, 15)
 
 
 def config_path():
@@ -42,7 +44,17 @@ class AppConfig:
     # 前回終了したときのウィンドウ（2026-10-23 班長指示：起動時に元に戻す）
     window_geometry: str = ""      # 最大化していないときの「幅x高さ+x+y」
     window_zoomed: bool = False     # 最大化していたか
-    preview_width: int = 0          # 確認表示の幅（左右の境目の位置。画素）
+    preview_width: int = 0          # 確認表示の幅（画素。ナビゲーションを出していないときの、左右の境目の位置）
+    # ナビゲーション（見出しの一覧）を一番左に出すか、その幅（画素。0 は既定の幅）。2026-11-24 班長指示
+    preview_visible: bool = True    # プレビューを出すか（2026-11-24 班長指示）
+    # 「仮名化する語」の一覧と「AI 連携」の組を出すか（2026-11-24 班長決定。仮名化する語がある文書では、これに関わらず出す）
+    ai_visible: bool = True
+    nav_visible: bool = False
+    nav_width: int = 0
+    # オプションのナビゲーションの書体（"" は画面の書体）・字の大きさ・行の間隔（ポイント）。2026-11-24 班長指示
+    nav_font_family: str = ""
+    nav_font_size: int = NAV_FONT_SIZE
+    nav_line_spacing_pt: int = NAV_LINE_SPACING
     # オプション（2026-10-24 班長指示）。書体の "" は既定（BIZ UDゴシック、なければＭＳ ゴシック）
     editor_font_family: str = ""
     editor_font_size: int = EDITOR_FONT_SIZE
@@ -68,6 +80,14 @@ class AppConfig:
             self.line_numbers = False
         if not isinstance(self.one_width, bool):
             self.one_width = False
+        if not isinstance(self.ai_visible, bool):
+            self.ai_visible = True
+        if not isinstance(self.preview_visible, bool):
+            self.preview_visible = True
+        if not isinstance(self.nav_visible, bool):
+            self.nav_visible = False
+        if not isinstance(self.nav_width, int) or isinstance(self.nav_width, bool) or self.nav_width < 0:
+            self.nav_width = 0
         if not self.vamd_folder:
             self.vamd_folder = str(default_folder())
         if not isinstance(self.editor_font_size, int) or not FONT_SIZE_RANGE[0] <= self.editor_font_size <= FONT_SIZE_RANGE[1]:
@@ -77,6 +97,12 @@ class AppConfig:
             self.editor_line_spacing_pt = EDITOR_LINE_SPACING
         if not isinstance(self.editor_font_family, str):
             self.editor_font_family = ""
+        if not _in_range(self.nav_font_size, FONT_SIZE_RANGE):
+            self.nav_font_size = NAV_FONT_SIZE
+        if not _in_range(self.nav_line_spacing_pt, NAV_LINE_SPACING_RANGE):
+            self.nav_line_spacing_pt = NAV_LINE_SPACING
+        if not isinstance(self.nav_font_family, str):
+            self.nav_font_family = ""
         if not isinstance(self.ai_prompt, str):
             self.ai_prompt = ""
         if not isinstance(self.ai_prompt_base, str):
@@ -85,6 +111,11 @@ class AppConfig:
     def remember_pdf_folder(self, folder):
         folder = str(Path(folder).resolve())
         self.pdf_folders = [folder] + [f for f in self.pdf_folders if f != folder][:MAX_PDF_FOLDERS - 1]
+
+
+def _in_range(value, bounds):
+    """設定の値が、範囲 bounds（最小, 最大）の内の整数か（True・False は数としない）。"""
+    return isinstance(value, int) and not isinstance(value, bool) and bounds[0] <= value <= bounds[1]
 
 
 def load(path=None):

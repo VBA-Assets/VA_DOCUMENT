@@ -75,6 +75,10 @@ class RibbonGroup(ttk.Frame):
                                            self._images(text, icon, large)) for large in (False, True)}
         return self._add("small", widget, grow)
 
+    def stack(self, widget):
+        """部品（チェックなど）を、小さいボタンと同じ列に積む（［蛍光ペン］の下の［ナビゲーション］。2026-11-24 班長指示）。"""
+        return self._add("small", widget)
+
     def block(self, widget):
         """部品（選択欄の並びなど）を、新しい列の上から置く。"""
         self._add("block", widget)

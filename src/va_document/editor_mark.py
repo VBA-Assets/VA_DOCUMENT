@@ -53,6 +53,7 @@ class EditorMarkMixin:
         if self._editor_mark_index is not None and index != self._editor_mark_index and length == self._editor_text_len:
             self._start_blink()
         self._editor_mark_index, self._editor_text_len = index, length
+        self._update_nav_current()         # ナビゲーションも、カーソルのある見出しを選ぶ（navigation.py）
         box = self.text.bbox("insert")
         if box is None:
             mark.place_forget()

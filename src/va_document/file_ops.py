@@ -103,7 +103,8 @@ class FileMixin:
             answers = MissingDialog(self, self.session, result).answers
             text = self.session.resolve(answers)
         self._load_text(text)
-        self._layout_pages(keep=False)     # 開いた文書は、1ページ目の上から表示する
+        if self.preview_shown():
+            self._layout_pages(keep=False)     # 開いた文書は、1ページ目の上から表示する（隠していれば、出したときに並べる）
         for m in result.messages:
             messagebox.showinfo(APP_NAME, m, parent=self)
         self.status.configure(text=f"開きました：{path.name}")
@@ -311,7 +312,10 @@ class FileMixin:
     def on_print(self):
         """印刷の画面で選んだページを、プリンターに実際のサイズ（A4）で印刷する。保存していない変更があれば、先に保存する
         （印刷したものと、保存した書式付きファイル〔PDF〕が違わないように。2026-10-26 班長指示。それまでは保存しなくても
-        印刷できた）。保存をやめたら印刷しない。"""
+        印刷できた）。保存をやめたら印刷しない。白紙のまま変えていない間は、何もしない（［印刷］を押せない。Ctrl+P も
+        効かせない。2026-11-24 班長指摘）。"""
+        if self.is_blank():
+            return
         if not printing.available():
             # Windows だけ（Mac などでは［印刷］を押せない。Ctrl+P も効かせない）。保存した PDF を、PDF のソフトで印刷する
             messagebox.showinfo(APP_NAME, "この PC では、VA Document から印刷できません。保存した PDF を開いて印刷してください。",

@@ -7,7 +7,6 @@
 import tkinter as tk
 
 from . import errors, theme
-from .layout import FONT_SIZE
 from .pdfpages import PdfPages
 from .pdfwriter import FontNotEmbeddable
 from .pseudonym import TOKEN_RE
@@ -36,7 +35,10 @@ class PreviewMixin:
         if self._preview_doc is not None:
             self._preview_doc.close()
         self._preview_doc = PdfPages(data)
-        self._layout_pages()
+        # プレビューを隠している間は、ページを画像にしない（出したときに並べる。panes.on_toggle_preview）。組むのは続ける
+        # （ヘッダーが入りきらないなどの知らせを出し、印刷・保存と同じ組み方を確かめるため）
+        if self.preview_shown():
+            self._layout_pages()
         self._show_layout_warning()
 
     def _show_layout_warning(self):
@@ -127,6 +129,8 @@ class PreviewMixin:
         """カーソルの字の位置に、確認表示で印を付ける。scroll なら、見えていないときにそのページへ送る。"""
         self._caret_job = None
         self.canvas.delete("caret")
+        if not self.preview_shown():
+            return
         m = self.session.layout_map
         pos = self._cursor_real()
         if m is None or pos is None or not self._page_tops:
@@ -142,7 +146,7 @@ class PreviewMixin:
         cy = self._page_tops[page] + top * z
         # 印は、入力カーソルと同じ位置（字と字の間）の上の ▼（縦棒だと、確認表示に入力できるように見えるため。
         # 2026-10-23 班長決定）
-        char_top = cy + (h - FONT_SIZE) / 2 * z
+        char_top = cy + (h - m.ts.font_size) / 2 * z
         s = max(CARET_MIN_SIZE, CARET_SIZE * z)
         # エディターの ▼ が点滅の途中（消えているところ）なら、確認表示の ▼ も消した形で描く（そろえて点滅させる）
         self.canvas.create_polygon(cx - s, char_top - s * 1.6, cx + s, char_top - s * 1.6, cx, char_top - 1,

@@ -45,6 +45,10 @@ EDITOR_FONT_SIZE = 11
 # 入力欄の行の間隔（ポイント。行の上と下に足す。折り返した行の間にも足す）。字の大きさや Word の段落の前後の間隔と
 # 同じ単位にし、表示の拡大（125%・150% など）でも字と一緒に広がるようにする（2026-10-26 班長決定。それまでは画素）
 EDITOR_LINE_SPACING = 6
+# ナビゲーション（見出しの一覧）の字の大きさと行の間隔（ポイント。行の上と下に足す）。オプションで変えられる。書体の既定は
+# エディターの既定と同じ（default_editor_family）。2026-11-24 班長指示
+NAV_FONT_SIZE = UI_FONT_SIZE
+NAV_LINE_SPACING = 3
 
 
 # オプションで選べるエディターの書体（全角と半角の幅がそろう等幅のもの。2026-10-24 班長指示）。この PC にあるものだけ出す
@@ -68,15 +72,34 @@ def editor_font_choices(root):
     return [f for f in EDITOR_FONT_CHOICES if f in families]
 
 
-def editor_font(root):
+def default_editor_family(root):
+    """オプションの書体の（既定）：EDITOR_FONT_FAMILIES のうち、この PC にある最初の書体。なければ "TkFixedFont"。"""
     families = set(tkfont.families(root))
+    return next((f for f in EDITOR_FONT_FAMILIES if f in families), "TkFixedFont")
+
+
+def editor_font(root):
     size = _editor["size"]
-    if _editor["family"] and _editor["family"] in families:
+    if _editor["family"] and _editor["family"] in set(tkfont.families(root)):
         return (_editor["family"], size)
-    for f in EDITOR_FONT_FAMILIES:
-        if f in families:
-            return (f, size)
-    return ("TkFixedFont", size)
+    return (default_editor_family(root), size)
+
+
+# ナビゲーションと「仮名化する語」の一覧のスタイル（書体・字の大きさ・行の高さをオプションで変える。apply_nav_prefs）
+LIST_STYLE = "Nav.Treeview"
+
+
+def apply_nav_prefs(root, family, size, spacing):
+    """ナビゲーションと「仮名化する語」の一覧（LIST_STYLE。2026-11-24 班長指示で、仮名化する語の一覧も同じ字にした）に、オプションの書体（"" は（既定）。エディターの（既定）と同じ書体。2026-11-24
+    班長指摘で、画面の書体から改めた）・字の大きさ・行の間隔（ポイント）を当てる。行の高さは、字の高さに行の間隔を足したもの
+    （表示の拡大〔125%・150% など〕でも字と一緒に広がる）。"""
+    if not family or family not in set(tkfont.families(root)):
+        family = default_editor_family(root)
+        if family == "TkFixedFont":
+            family = tkfont.nametofont("TkFixedFont").actual("family")
+    line = tkfont.Font(root=root, family=family, size=size).metrics("linespace")
+    style = ttk.Style(root)
+    style.configure(LIST_STYLE, font=(family, size), rowheight=line + round(spacing * root.winfo_fpixels("1p")))
 
 
 def apply_theme(root):
@@ -131,6 +154,8 @@ def apply_theme(root):
                     lightcolor=FIELD_BG, darkcolor=FIELD_BG)
 
     style.configure("Note.TLabel", foreground=NOTE)
+    # 白い地の欄の中に置く注記（ナビゲーションの「見出しがありません」）
+    style.configure("FieldNote.TLabel", background=FIELD_BG, foreground=NOTE)
     style.configure("TEntry", fieldbackground=FIELD_BG, bordercolor=BORDER, lightcolor=FIELD_BG,
                     darkcolor=FIELD_BG, insertcolor=TEXT, padding=3)
     style.map("TEntry", bordercolor=[("focus", ACCENT)])

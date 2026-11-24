@@ -33,7 +33,7 @@ from reportlab.pdfgen import canvas
 from .doctypes import (FW_DIGITS, PAGE_NUMBER_BOTTOM_CENTER, PAGE_NUMBER_BOTTOM_CENTER_DECORATED,
                        PAGE_NUMBER_BOTTOM_RIGHT, PAGE_NUMBER_NONE, PAGE_NUMBER_TOP_RIGHT)
 from .images import Picture
-from .layout import DOT_RADIUS, DOT_RISE, FONT_SIZE, PAGE_H, PAGE_W
+from .layout import DOT_RADIUS, DOT_RISE, PAGE_H, PAGE_W
 from .layout_blocks import DOUBLE_RULE_GAP, RULE_WIDTH
 
 def _font_dir():
@@ -101,13 +101,39 @@ def _has_bold(ts, lines):
         g.bold for piece in ts.tables for g in piece.glyphs)
 
 
+# 本文をゴシックで描く文書の種類の太字：字の輪郭を、字の大きさのこの倍の太さでなぞって太らせる（ゴシックの太字の書体を
+# 持たないため）
+FAKE_BOLD_STROKE = 0.04
+
+
+def _set_body_font(c, size=1.0):
+    """本文の書体と字の大きさ（文書の種類の字の大きさ × size）にする。"""
+    c.setFont(c.vamd_fonts[0], c.vamd_size * size)
+
+
 def _draw_glyph(c, x, y, g):
-    """字を描く。太字の字はゴシック（ＭＳ ゴシック、Mac などでは IPAゴシック）で描き、書体を戻す。横の倍率のある字
-    （［番号1字］で縮めた見出しの番号）は、倍率を掛けて描く。"""
-    if g.bold:
-        c.setFont(c.vamd_fonts[1], FONT_SIZE)
+    """字を描く。太字の字はゴシック（ＭＳ ゴシック、Mac などでは IPAゴシック）で描き、書体を戻す。本文がゴシックの
+    文書の種類では、輪郭をなぞって太らせる。横の倍率のある字（［番号1字］で縮めた見出しの番号）は、倍率を掛けて描く。
+    字の大きさの倍率のある字（見出しを大きくする文書の種類）は、その大きさで描く。"""
+    size = getattr(g, "size", 1.0)              # 表の字（TableGlyph）には倍率がない
+    if g.bold and c.vamd_gothic:
+        c.saveState()
+        _set_body_font(c, size)
+        c.setLineWidth(c.vamd_size * size * FAKE_BOLD_STROKE)
+        t = c.beginText(x, y)
+        t.setTextRenderMode(2)                  # 塗りと輪郭
+        t.textOut(g.ch)
+        c.drawText(t)
+        c.restoreState()
+        _set_body_font(c)
+    elif g.bold:
+        c.setFont(c.vamd_fonts[1], c.vamd_size * size)
         c.drawString(x, y, g.ch)
-        c.setFont(c.vamd_fonts[0], FONT_SIZE)
+        _set_body_font(c)
+    elif size != 1.0:
+        _set_body_font(c, size)
+        c.drawString(x, y, g.ch)
+        _set_body_font(c)
     elif getattr(g, "scale", 1.0) != 1.0:     # 表の字（TableGlyph）には倍率がない
         t = c.beginText(x, y)
         t.setHorizScale(g.scale * 100)
@@ -158,6 +184,8 @@ def pdf_bytes(ts, lines, doc_id=None, version=None, page_number=PAGE_NUMBER_BOTT
     （_draw_line_numbers）。fonts は書体の組（None は DEFAULT_FONTS）。images は画像の番号 → Picture。
     """
     mincho, gothic = fonts or DEFAULT_FONTS
+    if ts.dt.gothic:
+        mincho = gothic                         # 本文もゴシック（太字は、ゴシックを太らせて描く）
     images = images or {}
     pages = max((ln.page for ln in lines), default=1)
     pages = max([pages] + [p.page for p in ts.tables] + [p.page for p in ts.images])
@@ -165,9 +193,10 @@ def pdf_bytes(ts, lines, doc_id=None, version=None, page_number=PAGE_NUMBER_BOTT
     c = canvas.Canvas(buf, pagesize=(PAGE_W, PAGE_H), invariant=1)
     # 描くときに使う書体の名前（本文、太字）。描く関数は、ここから読む
     c.vamd_fonts = (register_font(*mincho), register_font(*gothic) if _has_bold(ts, lines) else None)
+    c.vamd_size, c.vamd_gothic = ts.font_size, ts.dt.gothic      # 字の大きさ（ポイント）と、本文がゴシックか
     text_center = ts.margin_left + ts.text_w / 2
     for pg in range(1, pages + 1):
-        c.setFont(c.vamd_fonts[0], FONT_SIZE)
+        _set_body_font(c)
         # 本文の行と表を、上から（文書の順に）描く。PDF の字の並びが文書の順になり、
         # 構文ファイルとの突き合わせ（recover.py）で、表の前後の本文を取り違えない。ヘッダー・フッターの行も
         # 上から描き、ページ番号はページの最後に描く（突き合わせで、余白の字からページ番号を除くため）
@@ -177,16 +206,20 @@ def pdf_bytes(ts, lines, doc_id=None, version=None, page_number=PAGE_NUMBER_BOTT
         for _, is_table, item in sorted(items, key=lambda t: (t[0], t[1])):
             if is_table:
                 draw_table(c, ts, item, highlight)
-                c.setFont(c.vamd_fonts[0], FONT_SIZE)
+                _set_body_font(c)
                 continue
             y = PAGE_H - ts.line_baseline(item)
+            fs = ts.font_size * item.size
             if highlight:
-                _draw_highlight(c, [(ts.margin_left + g.x, y, ts.advance(g.ch), g.pseudonym) for g in item.glyphs],
-                                PSEUDONYM_COLOR)
-                _draw_highlight(c, [(ts.margin_left + g.x, y, ts.advance(g.ch), g.highlight) for g in item.glyphs])
+                _draw_highlight(c, [(ts.margin_left + g.x, y, ts.glyph_w(g), g.pseudonym) for g in item.glyphs],
+                                PSEUDONYM_COLOR, fs)
+                _draw_highlight(c, [(ts.margin_left + g.x, y, ts.glyph_w(g), g.highlight) for g in item.glyphs],
+                                font_size=fs)
             for g in item.glyphs:
                 _draw_glyph(c, ts.margin_left + g.x, y, g)
-            _draw_dots(c, [(ts.margin_left + g.x, y, ts.advance(g.ch), g) for g in item.glyphs])
+            _draw_dots(c, [(ts.margin_left + g.x, y, ts.glyph_w(g), g) for g in item.glyphs], fs)
+            if item.rule:
+                _draw_rule(c, ts, item)
         if highlight:
             _draw_missing(c, ts, [p for p in ts.images if p.page == pg and p.number not in images])
         if line_numbers:
@@ -324,18 +357,35 @@ def read_images(path):
     return out
 
 
-def _draw_highlight(c, items, color=HIGHLIGHT_COLOR):
+# 見出しの下の線（文書の種類の heading_rules）：太さと色、行の下の端からの高さ（ポイント）
+RULE_COLOR = (0.82, 0.84, 0.87)
+HEADING_RULE_WIDTH = 0.8
+HEADING_RULE_RISE = 1.5
+
+
+def _draw_rule(c, ts, ln):
+    """見出しの最後の行の下に、本文の幅いっぱいの線を引く（Markdown のプレビューの ## などの下の線と同じ形）。"""
+    top, height = ts.line_box(ln)
+    y = PAGE_H - (top + height - HEADING_RULE_RISE)
+    c.saveState()
+    c.setStrokeColorRGB(*RULE_COLOR)
+    c.setLineWidth(HEADING_RULE_WIDTH)
+    c.line(ts.margin_left, y, ts.margin_left + ts.text_w, y)
+    c.restoreState()
+
+
+def _draw_highlight(c, items, color=HIGHLIGHT_COLOR, font_size=12):
     """蛍光ペンの字の後ろを黄色に塗る。items は [(x, 基準線の y, 字の幅, 蛍光ペンか)]（描く順）。同じ行で続いた字は、
-    字の間も含めて1つにつなげて塗る（表の隣のセルのように、半字より離れた字はつなげない）。"""
+    字の間も含めて1つにつなげて塗る（表の隣のセルのように、半字より離れた字はつなげない）。font_size は字の大きさ。"""
     c.saveState()
     c.setFillColorRGB(*color)
     run = None
     for x, y, w, on in items + [(0, None, 0, False)]:
-        if on and run and run[1] == y and x - run[2] <= FONT_SIZE / 2:
+        if on and run and run[1] == y and x - run[2] <= font_size / 2:
             run[2] = x + w
             continue
         if run:
-            c.rect(run[0], run[1] - FONT_SIZE * 36 / 256, run[2] - run[0], FONT_SIZE, stroke=0, fill=1)
+            c.rect(run[0], run[1] - font_size * 36 / 256, run[2] - run[0], font_size, stroke=0, fill=1)
         run = [x, y, x + w] if on else None
     c.restoreState()
 
@@ -354,19 +404,21 @@ def _draw_line_numbers(c, ts, lines, page):
             s = str(k)
             c.drawString(ts.margin_left - LINE_NUMBER_LAST_X - (len(s) - 1) * LINE_NUMBER_PITCH, PAGE_H - ts.baseline(row), s,
                          charSpace=LINE_NUMBER_PITCH - LINE_NUMBER_SIZE / 2)
-    c.setFont(c.vamd_fonts[0], FONT_SIZE)
+    _set_body_font(c)
 
 
-def _draw_dots(c, items):
+def _draw_dots(c, items, font_size=12):
     """傍点：字の上の中央に黒丸を描く。字ではなく図形で描く（PDF の字の並びに入れない。構文ファイルとの突き合わせ
-    〔recover.py〕と、PDF の字の検索を乱さないため）。items は [(x, 基準線の y, 字の幅, 字)]。空白には付けない。"""
-    dots = [(x + w / 2, y + DOT_RISE) for x, y, w, g in items if g.dot and not g.ch.isspace()]
+    〔recover.py〕と、PDF の字の検索を乱さないため）。items は [(x, 基準線の y, 字の幅, 字)]。空白には付けない。
+    黒丸の大きさと高さは、字の大きさ（font_size）に比べて決める（12pt のとき DOT_RADIUS・DOT_RISE）。"""
+    k = font_size / 12
+    dots = [(x + w / 2, y + DOT_RISE * k) for x, y, w, g in items if g.dot and not g.ch.isspace()]
     if not dots:
         return
     c.saveState()
     c.setFillColorRGB(0, 0, 0)
     for x, y in dots:
-        c.circle(x, y, DOT_RADIUS, stroke=0, fill=1)
+        c.circle(x, y, DOT_RADIUS * k, stroke=0, fill=1)
     c.restoreState()
 
 
@@ -374,11 +426,12 @@ def draw_table(c, ts, piece, highlight=False):
     """表の1ページ分（TablePiece）の字と罫線を描く。"""
     if highlight:
         _draw_highlight(c, [(ts.margin_left + g.x, PAGE_H - g.y, ts.advance(g.ch), g.pseudonym) for g in piece.glyphs],
-                        PSEUDONYM_COLOR)
-        _draw_highlight(c, [(ts.margin_left + g.x, PAGE_H - g.y, ts.advance(g.ch), g.highlight) for g in piece.glyphs])
+                        PSEUDONYM_COLOR, ts.font_size)
+        _draw_highlight(c, [(ts.margin_left + g.x, PAGE_H - g.y, ts.advance(g.ch), g.highlight) for g in piece.glyphs],
+                        font_size=ts.font_size)
     for g in piece.glyphs:
         _draw_glyph(c, ts.margin_left + g.x, PAGE_H - g.y, g)
-    _draw_dots(c, [(ts.margin_left + g.x, PAGE_H - g.y, ts.advance(g.ch), g) for g in piece.glyphs])
+    _draw_dots(c, [(ts.margin_left + g.x, PAGE_H - g.y, ts.advance(g.ch), g) for g in piece.glyphs], ts.font_size)
     if not piece.rows:
         return
     c.setLineWidth(RULE_WIDTH)

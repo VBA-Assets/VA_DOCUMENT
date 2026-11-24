@@ -748,10 +748,7 @@ class EditorMixin(EditorMarkMixin, TableCellMixin, ImageMixin):
         menu.add_command(label="コピー", accelerator=f"{key}C", command=lambda: self.text.event_generate("<<Copy>>"))
         menu.add_command(label="貼り付け", accelerator=f"{key}V",
                          command=lambda: self.text.event_generate("<<Paste>>"))
-        # 仮名化は、リボンの［選択範囲を仮名化］と同じ働き（2026-11-15 班長指示「右クリックメニューに仮名化を追加」）。
-        # 記号の英字を選ぶ画面が開くので「…」を付ける
-        menu.add_separator()
-        menu.add_command(label="選択範囲を仮名化…", command=self.on_register)
+        # 仮名化（［選択範囲を仮名化…］）は、出すときに足す（_set_editor_menu_ai。［AI 連携］のチェックを外していれば出さない）
         for seq in (("<Button-2>", "<Control-Button-1>") if mac else ("<Button-3>",)):
             self.text.bind(seq, self.on_editor_menu)
 
@@ -765,14 +762,29 @@ class EditorMixin(EditorMarkMixin, TableCellMixin, ImageMixin):
             self.text.tag_remove("sel", "1.0", "end")
             self.text.mark_set("insert", index)
             self._schedule_caret()
+        self._set_editor_menu_ai(self.ai_shown())
         state = "normal" if self._sel_range() else "disabled"
-        for label in ("コピー", "選択範囲を仮名化…"):
+        for label in ("コピー", "選択範囲を仮名化…")[:2 if self.ai_shown() else 1]:
             self.editor_menu.entryconfigure(label, state=state)
         try:
             self.editor_menu.tk_popup(event.x_root, event.y_root)
         finally:
             self.editor_menu.grab_release()
         return "break"
+
+    REGISTER_MENU_LABEL = "選択範囲を仮名化…"
+
+    def _set_editor_menu_ai(self, shown):
+        """右クリックのメニューの［選択範囲を仮名化…］（区切りの線の下）を、［AI 連携］を出しているときだけ置く（2026-11-24
+        班長決定。Tk のメニューは項目を隠せないので、足す・除く）。仮名化は、リボンの［選択範囲を仮名化］と同じ働き
+        （2026-11-15 班長指示「右クリックメニューに仮名化を追加」）。記号の英字を選ぶ画面が開くので「…」を付ける。"""
+        menu = self.editor_menu
+        has = menu.index("end") >= 2
+        if shown and not has:
+            menu.add_separator()
+            menu.add_command(label=self.REGISTER_MENU_LABEL, command=self.on_register)
+        elif not shown and has:
+            menu.delete(2, "end")
 
     def clipboard_text(self):
         """クリップボードの字（なければ None）。clipboard_get ではなく selection_get で読む：Tk の clipboard_get は、

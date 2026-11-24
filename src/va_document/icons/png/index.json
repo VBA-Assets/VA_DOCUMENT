@@ -1,6 +1,8 @@
 {
  "normal": [
   "arrow_swap",
+  "chevron_double_down",
+  "chevron_double_up",
   "clipboard_paste",
   "copy",
   "document_copy",
@@ -34,6 +36,8 @@
  ],
  "disabled": [
   "arrow_swap",
+  "chevron_double_down",
+  "chevron_double_up",
   "clipboard_paste",
   "copy",
   "document_copy",

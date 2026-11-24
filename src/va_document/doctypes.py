@@ -38,6 +38,12 @@ class DocType:
     list_left: int = 1              # リストの、見出しからの左インデントの増加量（字）
     list_first: int = -1            # リストの最初の行のインデント（字）
     one_width: bool = False         # 見出し番号を全角1字の幅に縮める（one_width_type。2026-10-26 班長指示）
+    # 字の形（2026-11-24 のリファクタリング。VA公用文の7種類は、ＭＳ 明朝 12pt のまま）
+    font_size: float = FONT_SIZE    # 字の大きさ（ポイント）
+    gothic: bool = False            # 本文をゴシックで描く（太字は、ゴシックを太らせて描く。pdfwriter）
+    heading_scale: tuple = (1.0,) * 9   # 見出しの字の大きさの倍率（レベルごと。行の高さに収まる大きさにする）
+    heading_rules: tuple = ()       # 見出しの下に線を引くレベル
+    web: bool = False               # ウェブ文書（見出しを太字にし、表題〔:=:〕を # の見出しと同じ見た目で組む。layout）
 
 
 def _styles(s):
@@ -80,9 +86,20 @@ DOC_TYPES = {d.key: d for d in (
     DocType("Technical", "技術文書", (25, 25, 25, 25), (38, 38), _TECH_NUMBERS, _styles("0,0,0,0,0,0,0,0,0"),
             (0,) * 9, (0,) * 9, (0,) * 9, (0,) * 9, 0, TITLE_LEFT, 0,
             list_bullet="-", list_number="%1)", list_number_style="alpha", list_left=0, list_first=0),
+    # ウェブ文書（2026-11-24 班長決定。ウェブに載せる文章の下書き）：VA公用文にはない種類。見出しの見た目は Markdown の
+    # プレビュー（GitHub・VS Code など）にならう：見出しの番号・インデントはなく、見出しは太字で、大きさで段を分け、# と ## の
+    # 下に線を引く。表題（:=:）は # の見出しと同じ見た目で組む（見出しとしては扱わない）。見出しのほかの記号（配置・->N・ヘッダー・改ページ・目次・画像・
+    # 蛍光ペン・傍点・均等割付・表・箇条書き・段落番号）は、ビジネス文書と同じに扱う（同日 班長指示）。本文はゴシックで、
+    # 字下げはなく、行の間を広めにする（行送りは字の大きさの約 1.85 倍）。字の大きさと1行の字数は、ウェブの記事の1行
+    # （40字ほど）に合わせる
+    DocType("Web", "ウェブ文書", (25, 25, 25, 25), (40, 36), ("",) * 9, _styles("0,0,0,0,0,0,0,0,0"),
+            (0,) * 9, (0,) * 9, (0,) * 9, (0,) * 9, 0, TITLE_LEFT, 0,
+            font_size=11, gothic=True, heading_scale=(1.5, 1.3, 1.15) + (1.0,) * 6, heading_rules=(1, 2),
+            web=True),
 )}
 DEFAULT_DOC_TYPE = "Saiban"   # 既定の文書の種類（裁判所提出書類）
 NAIYOU = "Naiyou"             # 内容証明（行番号・ヘッダー・フッターを付けない。naiyou.py の確かめをする）
+WEB = "Web"                   # ウェブ文書（行番号を付けない。ウェブの Markdown にある記号だけを読む）
 
 
 def can_one_width(dt):

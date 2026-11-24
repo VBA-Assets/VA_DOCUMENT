@@ -2,7 +2,9 @@
 
 ・画面のまとめ役。部品（mixin）を混ぜて使う：エディターの操作（editor_ops.py。カーソルの上の ▼ は editor_mark.py、表の挿入と
   表のセルは table_ops.py）、確認表示（preview.py）、
-  ファイルの操作（file_ops.py：開く・保存・閉じる・印刷）、AI 連携（ai_ops.py：仮名化・コピー・取り込み）。
+  ファイルの操作（file_ops.py：開く・保存・閉じる・印刷）、AI 連携（ai_ops.py：仮名化・コピー・取り込み）、
+  ナビゲーション（navigation.py：見出しの一覧。見出しの範囲の操作は outline.py）、欄の並びと幅（panes.py：ナビゲーション・
+  プレビューを出す・隠す）。
 ・エディターは常に仮名（記号）で表示し、実名は確認表示で見る（2026-10-24 班長決定）。
 ・確認表示は、組んだ PDF（メモリの中で作る）のページを画像にして表示する。文章を一時ファイルに書かない。
 ・外部と通信しない。クリップボードは、利用者がボタンを押したときだけ使う。
@@ -24,13 +26,14 @@ from .dialogs import OptionsDialog
 from .editor_ops import EditorMixin
 from .file_ops import FileMixin
 from .icons import IconSet
+from .navigation import NavigationMixin
+from .panes import EDITOR_MIN_WIDTH, PREVIEW_DEFAULT_WIDTH, PaneMixin
 from .ribbon import Ribbon, labeled_rows
 from .preview import PREVIEW_SCROLL_STEP, PreviewMixin
 from .session import Session
 
 VERSION_LABEL = "Ver" + __version__.replace(".", "")
 REFRESH_DELAY_MS = 600
-SASH_RESTORE_SECONDS = 1.5   # 起動から、確認表示の幅を置き直す間（秒）
 # 既定の AI への指示が新しくなったときの知らせ（書き換えられた指示を使っている人に、起動のときに一度だけ。2026-10-28 班長決定）
 PROMPT_UPDATED_NOTICE = ("この版で、AI への指示の既定の文が新しくなりました。いまは、ユーザーによって書き換えられた指示を"
                          "使っているため、新しい既定の文は使われていません。オプションの［確認・修正］で、新しい既定の文と"
@@ -86,9 +89,9 @@ def window_icon_path():
     return base / "assets" / "VA_Document.ico"
 
 
-class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
+class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, NavigationMixin, PaneMixin, tk.Tk):
     """メインの画面。エディターの操作（editor_ops）・確認表示（preview）・ファイルの操作（file_ops）・
-    AI 連携（ai_ops）の部品を混ぜて使う。"""
+    AI 連携（ai_ops）・ナビゲーション（navigation）・欄の並びと幅（panes）の部品を混ぜて使う。"""
 
     def __init__(self, cfg=None, open_path=None):
         super().__init__()
@@ -98,13 +101,15 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
         self.cfg = cfg or config.load()
         # オプションのエディターの書体・字の大きさ・行の間隔（2026-10-24 班長指示）
         theme.set_editor_prefs(self.cfg.editor_font_family, self.cfg.editor_font_size, self.cfg.editor_line_spacing_pt)
+        # ナビゲーションの書体・字の大きさ・行の間隔（2026-11-24 班長指示）
+        theme.apply_nav_prefs(self, self.cfg.nav_font_family, self.cfg.nav_font_size, self.cfg.nav_line_spacing_pt)
         self.session = Session(self.cfg)
         self._refresh_job = None
         self._preview_doc = None
         self._layout_warning = ""       # 状態の欄に出している、組んだときの知らせ（ヘッダーが本文に重なるなど）
         self._preview_page = 0
         self._page_tops = []
-        self._sash_target = None        # 起動したときに戻す左右の境目の位置（_restore_window）
+        self._sash_until = None         # 起動したときに欄の幅を置き直す間の終わり（panes._restore_panes）
         self._pdf_name_text = ""        # プレビューの上の PDF の名前（入りきらないときは、省いて出す）
         self._loading = False
         self._last_printer = ""         # 前に印刷したプリンター（起動している間だけ覚える）
@@ -231,19 +236,29 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
         """上にリボン（ウィンドウの幅いっぱい。Word や PDF のツールと同じ）、その下の左にプレビュー、右に入力欄を置く
         （2026-10-30 班長決定。それまでは、左のプレビューをウィンドウの上下いっぱいに置き、リボンは右の入力欄の上に
         置いていた。リボンが右の構文ファイルの名前の下にあり、PDF にも関わる「ファイル」の組が、構文ファイルだけの
-        操作に見えたため）。左右の上には、それぞれのファイルの名前と、そのファイルの操作のボタンを置く。"""
+        操作に見えたため）。左右の上には、それぞれのファイルの名前と、そのファイルの操作のボタンを置く。
+        リボンの「表示」の［ナビゲーション］にチェックを入れたときだけ、プレビューの左（一番左）に見出しの一覧を出す
+        （2026-11-24 班長指示。navigation.py）。プレビューも、［プレビュー］にチェックを入れたときだけ出す（同日 班長指示。
+        欄の並びと幅は panes.py）。"""
         self._build_menu()
         self._build_ribbon(self)
         self.panes = panes = tk.PanedWindow(self, orient="horizontal", sashwidth=6, bd=0)
         panes.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self._build_navigation(panes)
         # 左：プレビュー
         self._preview_pane = preview = ttk.Frame(panes)
         self._build_preview(preview)
-        panes.add(preview, minsize=300, width=620, stretch="always")
         # 右：入力欄。下の部品から順に置く（入力欄が残りの高さを使う）
         self._work_pane = work = ttk.Frame(panes)
-        panes.add(work, minsize=560, stretch="always")
+        panes.add(work, minsize=EDITOR_MIN_WIDTH, stretch="always")
+        if self.cfg.preview_visible:
+            self._add_preview_pane(PREVIEW_DEFAULT_WIDTH)
+        if self.cfg.nav_visible:
+            self._add_nav_pane(self.nav_start_width())
         self._build_name_row(work)
+        # ナビゲーションの題の行の高さを、エディターの上の構文ファイルの名前の行（プレビューの上の PDF の名前の行と同じ
+        # 高さ）にそろえる（一覧とプレビュー・エディターの上端をそろえる。プレビューを隠していても、そろうように）
+        self._name_row.bind("<Configure>", lambda e: self._nav_head.configure(height=e.height), add="+")
         self.status = ttk.Label(work, style="Note.TLabel", padding=(4, 4, 0, 0))
         self.status.pack(side="bottom", fill="x")
         self._build_dictionary_list(work)
@@ -286,7 +301,7 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
         # 班長指示。どちらの行にも同じ大きさのボタンがあるので、高さは自然にそろう）。名前の右に［パスをコピー］（構文
         # ファイルのフルパスをコピーする。Claude Code に「このファイルを直して」と渡す、Claude の添付の画面の「ファイル名」
         # の欄に貼る、などに使う。2026-10-24 班長指示）
-        name_row = ttk.Frame(work)
+        self._name_row = name_row = ttk.Frame(work)
         name_row.pack(fill="x")
         self.doc_id_label = ttk.Label(name_row, style="Note.TLabel", anchor="w", padding=(4, 0, 0, 4))
         self.doc_id_label.pack(side="left")
@@ -301,8 +316,8 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
         top = ttk.Frame(parent)
         top.pack(fill="x", padx=8, pady=(8, 0))
         # 囲みを先に置く（ウィンドウが狭いときは、ほかの組の側が縮んで折り返す）
-        box = ttk.Frame(top, style="Border.TFrame", padding=1)
-        box.pack(side="right", anchor="n", pady=(0, 4))
+        self._ai_box = box = ttk.Frame(top, style="Border.TFrame", padding=1)
+        box.pack(**self.AI_BOX_PACK)
         self.ai_ribbon = Ribbon(box, self.icons, boxed=True)
         self.ai_ribbon.pack()
         self.ribbon = rb = Ribbon(top, self.icons)
@@ -389,6 +404,25 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
         g.small("置換", lambda: self.on_find(True))
         # 蛍光ペンは「表示」の組にして、「編集」の右に置く（確認表示だけに出し、PDF・印刷には出さない。2026-10-24 班長指示）
         g = rb.group("表示")
+        # 左の列に、上から［AI 連携］［プレビュー］［ナビゲーション］のチェック、右の列に［蛍光ペン］（2026-11-24 班長指示）。
+        # ［AI 連携］：チェックを外すと、「仮名化する語」の一覧・「AI 連携」の組・エディターの右クリックの［選択範囲を仮名化…］を
+        # 隠す（AI を使わない利用者のため。同日 班長決定。ai_ops._sync_ai_area）。仮名化する語がある間は、外せない
+        self.ai_var = tk.BooleanVar(value=self.cfg.ai_visible)
+        self.ai_check = tk.Checkbutton(g.body, text="AI 連携", variable=self.ai_var, command=self.on_toggle_ai)
+        g.stack(self.ai_check)
+        # ［ナビゲーション］：チェックを入れたときだけ、一番左に見出しの一覧を出す（Word の［表示］の［ナビゲーション
+        # ウィンドウ］と同じ。2026-11-24 班長指示）。出すかどうかは、この PC の設定に覚える。［蛍光ペン］の下の行に置く
+        # （同日 班長指示）
+        # ［プレビュー］：チェックを入れたときだけ、プレビューを出す（［蛍光ペン］と［ナビゲーション］の間。2026-11-24 班長
+        # 指示）。隠している間も、開く・保存・印刷（Ctrl+P）などは使える
+        self.preview_var = tk.BooleanVar(value=self.cfg.preview_visible)
+        self.preview_check = tk.Checkbutton(g.body, text="プレビュー", variable=self.preview_var,
+                                            command=self.on_toggle_preview)
+        g.stack(self.preview_check)
+        self.nav_var = tk.BooleanVar(value=self.cfg.nav_visible)
+        self.nav_check = tk.Checkbutton(g.body, text="ナビゲーション", variable=self.nav_var,
+                                        command=self.on_toggle_navigation)
+        g.stack(self.nav_check)
         g.small("蛍光ペン", self.on_highlight)
         # 仮名化・コピー・貼り付けは一連の操作なので、1つの組にする（2026-10-23 班長指示）。［選択範囲を仮名化］は
         # 大きいボタン、［コピー］［貼り付け］はその右に積む小さいボタンにする（2026-10-24・25 班長指示）
@@ -407,14 +441,15 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
         frame = 4
         main = max((g.winfo_reqheight() for g in self.ribbon.groups), default=0)
         ai = max((g.winfo_reqheight() for g in self.ai_ribbon.groups), default=0)
-        height = max(main, ai + frame)
+        # 「AI 連携」を隠しているときは、ほかの組の高さだけで決める
+        height = max(main, ai + frame) if self._ai_box.winfo_manager() else main
         if height != self.ribbon._min_height:
             self.ribbon.set_min_height(height)
             self.ai_ribbon.set_min_height(height - frame)
 
     def _build_dictionary_list(self, work):
         """仮名化した語の一覧（エディターの下。下の状態の欄の上）。"""
-        bottom = ttk.Frame(work, padding=(4, 6, 0, 0))
+        self._dictionary_frame = bottom = ttk.Frame(work, padding=(4, 6, 0, 0))
         bottom.pack(side="bottom", fill="x")
         # 一覧の題の右に、変え方を添える（［解除］［変更］のボタンは置かず、行のダブルクリックで開く変更の画面で
         # 変える・解除する。画面を簡潔にし、仮名化の解除を手軽にしすぎないため。2026-10-27 班長指示）
@@ -427,8 +462,9 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
                    ).pack(side="left", padx=(8, 0))
         tree_row = ttk.Frame(bottom)
         tree_row.pack(fill="x")
+        # 字は、ナビゲーションと同じ書体・大きさ・行の間隔（オプションの「ナビゲーション・仮名化する語」。2026-11-24 班長指示）
         self.tree = ttk.Treeview(tree_row, columns=("token", "word", "kind"), show="headings", height=4,
-                                 selectmode="browse")
+                                 selectmode="browse", style=theme.LIST_STYLE)
         for col, label, width in (("token", "記号", 120), ("word", "元の語", 300), ("kind", "種別", 80)):
             self.tree.heading(col, text=label, anchor="w")
             self.tree.column(col, width=width, anchor="w", stretch=col == "word")
@@ -444,7 +480,7 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
     def _build_editor(self, work):
         """エディター（入力欄）と、記号・太字・検索などの色付けの設定。"""
         # エディターは常に仮名（記号）で表示し、実名は確認表示で見る（実名・仮名の切り替えはなくした。2026-10-24 班長決定）
-        editor = ttk.Frame(work, padding=(4, 0, 0, 0))
+        self._editor_frame = editor = ttk.Frame(work, padding=(4, 0, 0, 0))
         editor.pack(fill="both", expand=True)
         self.text = tk.Text(editor, wrap="char", undo=True, font=theme.editor_font(self), padx=6, pady=6,
                             **theme.editor_spacing(self))
@@ -519,6 +555,8 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
         self.after_idle(lambda: self.configure(menu=bar))
 
     ABOUT_LINE = "実名を AI に渡さずに、VA公用文と同じ書式の文書を作る"
+    # 「AI 連携」の囲みの置き方（隠して出し直すときも、同じ置き方にする）
+    AI_BOX_PACK = {"side": "right", "anchor": "n", "pady": (0, 4)}
 
     def about_text(self):
         """「について」の文。VA Case・VA FAX と同じ形：名前と版・1行の説明・空の行・作った者・ライセンス（2026-11-14
@@ -564,9 +602,12 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
                   f"PDF を保存したフォルダ（覚えている数）：{len(cfg.pdf_folders)}",
                   f"エディター：書体 {cfg.editor_font_family or '既定'}・{cfg.editor_font_size}pt・"
                   f"行の間隔 {cfg.editor_line_spacing_pt}pt",
+                  f"ナビゲーション：書体 {cfg.nav_font_family or '既定'}・{cfg.nav_font_size}pt・"
+                  f"行の間隔 {cfg.nav_line_spacing_pt}pt",
                   f"AI への指示：{'書き換えあり' if cfg.ai_prompt else '既定'}",
                   f"ウィンドウ：{cfg.window_geometry or '設定なし'}・最大化 {yes(cfg.window_zoomed)}・"
-                  f"プレビューの幅 {cfg.preview_width}", ""]
+                  f"プレビューの幅 {cfg.preview_width}・プレビュー {yes(cfg.preview_visible)}・"
+                  f"ナビゲーション {yes(cfg.nav_visible)}・AI 連携 {yes(cfg.ai_visible)}", ""]
         text = self.raw_text()
         try:
             modified = s.is_modified(self.real_text())
@@ -607,6 +648,7 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
         self.text.insert("1.0", self.session.dictionary.pseudonymize(text))
         self.text.edit_reset()
         self._undo_steps, self._redo_steps = [], []     # Ctrl+Z で戻せる仮名化の登録・解除（ai_ops.on_undo）
+        self._ai_forced = False         # 仮名化する語があるので「AI 連携」を出している文書か（ai_ops._sync_ai_area）
         self.text.edit_modified(False)
         self._loading = False
         self._sync_settings_boxes()
@@ -640,6 +682,7 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
         self._tokenize_editor()
         self._highlight()
         self._render_preview()
+        self._refresh_navigation()
 
     def _fit_ime(self):
         family, size = theme.editor_font(self)
@@ -672,6 +715,7 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
         self.one_width_var.set(s.one_width)
         self.one_width_check.configure(state="normal" if s.allows_one_width() else "disabled")
 
+
     # ---------- ウィンドウの大きさ・位置（前回終了したときに戻す。2026-10-23 班長指示） ----------
 
     def _restore_window(self):
@@ -684,26 +728,9 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
                 self.state("zoomed")
             except tk.TclError:
                 pass
-        if cfg.preview_width > 0:
-            # 左右の境目は、ウィンドウの大きさが決まってから置く。起動直後は大きさが何度か変わるので、
-            # 起動から少しの間は、左右の欄の大きさが変わるたびに置き直す
-            self._sash_target = cfg.preview_width
-            self._sash_until = time.monotonic() + SASH_RESTORE_SECONDS
-            # 左右の欄の中身の大きさが決まるときにも境目が動くので、左右それぞれの欄の大きさの変化でも置き直す
-            for widget in (self.panes, self._preview_pane, self._work_pane):
-                widget.bind("<Configure>", self._place_sash, add="+")
-            self.after_idle(self._place_sash)
+        # 左右の欄の幅（ナビゲーション・プレビュー）は、ウィンドウの大きさが決まってから置く（panes.py）
+        self._restore_panes()
         self.bind("<Configure>", self._on_window_configure, add="+")
-
-    def _place_sash(self, event=None):
-        if self._sash_target is None or time.monotonic() > self._sash_until:
-            self._sash_target = None
-            return
-        try:
-            if self.panes.sash_coord(0)[0] != max(300, self._sash_target):
-                self.panes.sash_place(0, max(300, self._sash_target), 0)
-        except tk.TclError:
-            pass
 
     def _on_window_configure(self, event=None):
         # 最大化していないときの大きさ・位置を覚えておく（最大化したまま閉じても、元の大きさに戻せるように）
@@ -716,16 +743,18 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
             zoomed = self.state() == "zoomed"
             cfg.window_zoomed = zoomed
             cfg.window_geometry = (self._normal_geometry if zoomed and self._normal_geometry else self.geometry())
-            cfg.preview_width = self.panes.sash_coord(0)[0]
+            self._remember_panes()
         except tk.TclError:
             pass
         # 文書の種類・ページ番号も覚える（次に起動したときの新しい文書は、この設定で始める。2026-10-23 班長指示）
         cfg.remember_settings(self.session.settings)
 
     def on_options(self):
-        """オプション（構文ファイルの保存場所、エディターの書体・字の大きさ・行の間隔。2026-10-24 班長指示）。"""
+        """オプション（構文ファイルの保存場所、エディターの書体・字の大きさ・行の間隔。2026-10-24 班長指示。ナビゲーションの
+        書体・字の大きさ・行の間隔。2026-11-24 班長指示）。"""
         dlg = OptionsDialog(self, self.cfg, theme.editor_font_choices(self), config.FONT_SIZE_RANGE,
-                            config.LINE_SPACING_RANGE, self.session.prompt or vamd.PROMPT, vamd.PROMPT)
+                            config.LINE_SPACING_RANGE, self.session.prompt or vamd.PROMPT, vamd.PROMPT,
+                            config.NAV_LINE_SPACING_RANGE)
         r = dlg.result
         if r is None:
             return
@@ -739,6 +768,9 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
         self.cfg.editor_font_family = r["font_family"]
         self.cfg.editor_font_size = r["font_size"]
         self.cfg.editor_line_spacing_pt = r["line_spacing"]
+        self.cfg.nav_font_family = r["nav_font_family"]
+        self.cfg.nav_font_size = r["nav_font_size"]
+        self.cfg.nav_line_spacing_pt = r["nav_line_spacing"]
         if r["prompt"] is not None:
             # AI への指示：すべての文書に共通（2026-10-28 班長決定）。今の文書の保存してある構文ファイルの指示も書き直す。
             # ほかの文書は、開いて保存するときに書き直す
@@ -752,12 +784,13 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
         self.status.configure(text="オプションを変えました。")
 
     def _apply_editor_prefs(self):
-        """オプションのエディターの書体・字の大きさ・行の間隔を、エディターに当てる。"""
+        """オプションのエディター・ナビゲーションの書体・字の大きさ・行の間隔を、エディターと一覧に当てる。"""
         theme.set_editor_prefs(self.cfg.editor_font_family, self.cfg.editor_font_size, self.cfg.editor_line_spacing_pt)
         family, size = theme.editor_font(self)
         self.text.configure(font=(family, size), **theme.editor_spacing(self))
         self.text.tag_configure("bold", font=(family, size, "bold"))
         self._fit_ime()
+        theme.apply_nav_prefs(self, self.cfg.nav_font_family, self.cfg.nav_font_size, self.cfg.nav_line_spacing_pt)
 
     def on_close(self):
         # 仮名化した語の一覧が消えることは確かめない（保存した文書は、開き直せば構文ファイルと PDF を突き合わせて
@@ -810,6 +843,10 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, tk.Tk):
             own["close_button"].configure(state=state)
         if own.get("file_menu") is not None:
             own["file_menu"].entryconfigure("閉じる", state=state)
+        # ［印刷］も、白紙のまま変えていない間は押せない（刷るものがない。2026-11-24 班長指摘）。印刷できない PC（Mac など）
+        # では、いつも押せない
+        if own.get("print_button") is not None:
+            own["print_button"].configure(state=state if printing.available() else "disabled")
 
     def _fit_pdf_name(self):
         """PDF の名前が行に入りきらないときは、後ろを「…」で省き、マウスを重ねると全体を出す（［印刷］とページの番号を

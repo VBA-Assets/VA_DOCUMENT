@@ -37,6 +37,9 @@ BUTTON_ICONS = {
     "フッター": "document_footer",     # document_footer は自作（document_header を上下に返した形。2026-11-03）
     "表": "table",      # table は自作（Fluent の table にならった線画。2026-10-31）
     "パスをコピー": "copy", "ファイルから読み込む": "folder_open", "検索": "search", "蛍光ペン": "highlight", "置換": "arrow_swap",
+    # ナビゲーションの題の右のボタン。chevron_double_down・chevron_double_up は自作（Fluent の chevron_down・chevron_up の
+    # 形を2つ重ねたもの。2026-11-24）
+    "展開": "chevron_double_down", "折りたたむ": "chevron_double_up",
 }
 
 

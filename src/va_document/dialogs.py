@@ -325,14 +325,18 @@ class LoadEntriesDialog(_Dialog):
 
 
 class OptionsDialog(_Dialog):
-    """オプション（構文ファイルの保存場所、エディターの書体・字の大きさ・行の間隔。2026-10-24 班長指示）。
-    result は {"vamd_folder", "font_family", "font_size", "line_spacing", "prompt"}（prompt は直した AI への指示。
-    直していなければ None。やめたら result が None）。"""
+    """オプション（構文ファイルの保存場所、エディターの書体・字の大きさ・行の間隔。2026-10-24 班長指示。ナビゲーションの
+    書体・字の大きさ・行の間隔。2026-11-24 班長指示）。
+    result は {"vamd_folder", "font_family", "font_size", "line_spacing", "nav_font_family", "nav_font_size",
+    "nav_line_spacing", "prompt"}（prompt は直した AI への指示。直していなければ None。やめたら result が None）。"""
 
-    def __init__(self, parent, cfg, font_choices, size_range, spacing_range, prompt, default_prompt):
+    DEFAULT_FONT = "（既定）"
+    LIST_BOX_TITLE = "ナビゲーション・仮名化する語"     # 2つの一覧に共通の書体の設定の枠
+
+    def __init__(self, parent, cfg, font_choices, size_range, spacing_range, prompt, default_prompt, nav_spacing_range):
         super().__init__(parent, "オプション")
         self.result = None
-        self.size_range, self.spacing_range = size_range, spacing_range
+        self.size_range, self.spacing_range, self.nav_spacing_range = size_range, spacing_range, nav_spacing_range
         self.prompt, self.default_prompt, self.new_prompt = prompt, default_prompt, None
         body = ttk.Frame(self, padding=(16, 14, 16, 4))
         body.pack(fill="both", expand=True)
@@ -349,26 +353,16 @@ class OptionsDialog(_Dialog):
                        "このフォルダには構文ファイル（仮名化済み）だけを置き、書式付きファイル（PDF）や案件の資料（実名入り）は"
                        "置かないでください。\n"
                        "ほかの人が構文ファイルを開いて実名に戻すには、同じ文書の書式付きファイル（PDF）も必要です。").pack(anchor="w", pady=(6, 0))
-        box = ttk.Labelframe(body, text="エディター", padding=(10, 6))
-        box.pack(fill="x", pady=(10, 0))
-        self.family = tk.StringVar(value=cfg.editor_font_family or "（既定）")
-        self.size = tk.StringVar(value=str(cfg.editor_font_size))
-        self.spacing = tk.StringVar(value=str(cfg.editor_line_spacing_pt))
-        ttk.Label(box, text="書体").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=2)
-        ttk.Combobox(box, textvariable=self.family, state="readonly", width=20,
-                     values=["（既定）"] + list(font_choices)).grid(row=0, column=1, sticky="w", pady=2)
-        for r, (label, var, rng, unit) in enumerate((("字の大きさ", self.size, size_range, "ポイント"),
-                                                     ("行の間隔", self.spacing, spacing_range,
-                                                      "ポイント（行の上と下に足す間隔）")), start=1):
-            ttk.Label(box, text=label).grid(row=r, column=0, sticky="w", padx=(0, 8), pady=2)
-            cell = ttk.Frame(box)
-            cell.grid(row=r, column=1, sticky="w", pady=2)
-            ttk.Spinbox(cell, textvariable=var, from_=rng[0], to=rng[1], width=5).pack(side="left")
-            ttk.Label(cell, text=unit, style="Note.TLabel").pack(side="left", padx=(6, 0))
-        ttk.Label(box, style="Note.TLabel", justify="left",
-                  text="書体は、全角と半角の幅がそろうものから選べます。\n"
-                       "書体・字の大きさ・行の間隔は、エディターの見た目だけで、PDF には関係しません。").grid(
-            row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        self.family, self.size, self.spacing = self._font_box(
+            body, "エディター", cfg.editor_font_family, cfg.editor_font_size, cfg.editor_line_spacing_pt, font_choices,
+            spacing_range, "書体は、全角と半角の幅がそろうものから選べます。\n"
+                           "書体・字の大きさ・行の間隔は、エディターの見た目だけで、PDF には関係しません。")
+        # ナビゲーション（見出しの一覧）と「仮名化する語」の一覧も、エディターと同じ項目を変えられる（2026-11-24 班長指示。
+        # 2つの一覧は同じ字にし、設定も1つにした）。（既定）の書体は、エディターの（既定）と同じ（同日 班長指摘）
+        self.nav_family, self.nav_size, self.nav_spacing = self._font_box(
+            body, self.LIST_BOX_TITLE, cfg.nav_font_family, cfg.nav_font_size, cfg.nav_line_spacing_pt, font_choices,
+            nav_spacing_range, "（既定）の書体は、エディターの（既定）と同じです。\n"
+                               "書体・字の大きさ・行の間隔は、2つの一覧の見た目だけで、PDF には関係しません。")
         box = ttk.Labelframe(body, text="AI への指示（構文ファイルの上の部分）", padding=(10, 6))
         box.pack(fill="x", pady=(10, 0))
         row = ttk.Frame(box)
@@ -379,6 +373,42 @@ class OptionsDialog(_Dialog):
         self._show_prompt_state()
         self.buttons("OK", self.accept, "キャンセル")
         self.run()
+
+    def _font_box(self, body, title, family, size, spacing, font_choices, spacing_range, note):
+        """書体・字の大きさ・行の間隔の枠（エディター・ナビゲーションで同じ形）。(書体, 字の大きさ, 行の間隔) の変数を返す。"""
+        box = ttk.Labelframe(body, text=title, padding=(10, 6))
+        box.pack(fill="x", pady=(10, 0))
+        family = tk.StringVar(value=family or self.DEFAULT_FONT)
+        size, spacing = tk.StringVar(value=str(size)), tk.StringVar(value=str(spacing))
+        ttk.Label(box, text="書体").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=2)
+        ttk.Combobox(box, textvariable=family, state="readonly", width=20,
+                     values=[self.DEFAULT_FONT] + list(font_choices)).grid(row=0, column=1, sticky="w", pady=2)
+        for r, (label, var, rng, unit) in enumerate((("字の大きさ", size, self.size_range, "ポイント"),
+                                                     ("行の間隔", spacing, spacing_range,
+                                                      "ポイント（行の上と下に足す間隔）")), start=1):
+            ttk.Label(box, text=label).grid(row=r, column=0, sticky="w", padx=(0, 8), pady=2)
+            cell = ttk.Frame(box)
+            cell.grid(row=r, column=1, sticky="w", pady=2)
+            ttk.Spinbox(cell, textvariable=var, from_=rng[0], to=rng[1], width=5).pack(side="left")
+            ttk.Label(cell, text=unit, style="Note.TLabel").pack(side="left", padx=(6, 0))
+        # 注意書きの幅の余りは、右の空いた列に回す（名前の列が広がって、枠ごとに選択欄の左端がずれないように）
+        ttk.Label(box, style="Note.TLabel", justify="left", text=note).grid(
+            row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        box.columnconfigure(2, weight=1)
+        return family, size, spacing
+
+    def _numbers(self, title, size, spacing, spacing_range):
+        """枠（title）の字の大きさと行の間隔を数にする。数でない・範囲の外なら知らせて None。"""
+        try:
+            size, spacing = int(size.get()), int(spacing.get())
+        except ValueError:
+            messagebox.showerror(APP_NAME, f"{title}の字の大きさと行の間隔は、数字で入れてください。", parent=self)
+            return None
+        if not (self.size_range[0] <= size <= self.size_range[1] and spacing_range[0] <= spacing <= spacing_range[1]):
+            messagebox.showerror(APP_NAME, f"{title}の字の大きさは {self.size_range[0]}〜{self.size_range[1]}、行の間隔は "
+                                 f"{spacing_range[0]}〜{spacing_range[1]} の数字にしてください。", parent=self)
+            return None
+        return size, spacing
 
     def _show_prompt_state(self):
         current = self.new_prompt if self.new_prompt is not None else self.prompt
@@ -405,18 +435,18 @@ class OptionsDialog(_Dialog):
         if not folder or not Path(folder).is_dir():
             messagebox.showerror(APP_NAME, "構文ファイルの保存場所のフォルダが見つかりません。", parent=self)
             return
-        try:
-            size, spacing = int(self.size.get()), int(self.spacing.get())
-        except ValueError:
-            messagebox.showerror(APP_NAME, "字の大きさと行の間隔は、数字で入れてください。", parent=self)
+        editor = self._numbers("エディター", self.size, self.spacing, self.spacing_range)
+        if editor is None:
             return
-        if not (self.size_range[0] <= size <= self.size_range[1] and self.spacing_range[0] <= spacing <= self.spacing_range[1]):
-            messagebox.showerror(APP_NAME, f"字の大きさは {self.size_range[0]}〜{self.size_range[1]}、行の間隔は "
-                                 f"{self.spacing_range[0]}〜{self.spacing_range[1]} の数字にしてください。", parent=self)
+        nav = self._numbers(self.LIST_BOX_TITLE, self.nav_size, self.nav_spacing, self.nav_spacing_range)
+        if nav is None:
             return
-        family = self.family.get()
-        self.result = {"vamd_folder": folder, "font_family": "" if family == "（既定）" else family,
-                       "font_size": size, "line_spacing": spacing, "prompt": self.new_prompt}
+
+        def family(var):
+            return "" if var.get() == self.DEFAULT_FONT else var.get()
+        self.result = {"vamd_folder": folder, "font_family": family(self.family), "font_size": editor[0],
+                       "line_spacing": editor[1], "nav_font_family": family(self.nav_family), "nav_font_size": nav[0],
+                       "nav_line_spacing": nav[1], "prompt": self.new_prompt}
         self.destroy()
 
 

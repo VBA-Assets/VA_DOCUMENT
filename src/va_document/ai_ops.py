@@ -1,12 +1,12 @@
 """AI 連携：仮名化（選択範囲を仮名化・解除・一覧）、構文ファイルのコピー、AI の回答の取り込み、
-外で書き換えられた構文ファイルの取り込み。
+外で書き換えられた構文ファイルの取り込み、「AI 連携」の欄を出す・隠す（［AI 連携］のチェック）。
 
 メインの画面（app.MainWindow）の部品（mixin）。保存（on_save）は file_ops.FileMixin が持つ。
 """
 from dataclasses import dataclass
 from tkinter import TclError, filedialog, messagebox
 
-from . import APP_NAME, errors, vamd
+from . import APP_NAME, config, errors, vamd
 from .dialogs import UNREGISTER, ChangedOutsideDialog, EditDialog, LoadEntriesDialog, RegisterDialog
 from .pseudonym import KINDS, NotRegistrable, token_label, trim_selection
 from .recover import PdfMismatch
@@ -32,6 +32,52 @@ class AiMixin:
         self.tree.delete(*self.tree.get_children())
         for e in sorted(self.session.dictionary.entries.values(), key=lambda e: (KINDS.index(e.kind), e.token)):
             self.tree.insert("", "end", iid=e.token, values=(e.token, e.word, e.kind))
+        self._sync_ai_area()
+
+    # ------------------------------------------------------------------
+    # 「AI 連携」を出す・隠す（2026-11-24 班長決定。AI を使わない利用者のため）
+    # ------------------------------------------------------------------
+
+    def ai_shown(self):
+        """「仮名化する語」の一覧と「AI 連携」の組を出しているか。"""
+        return bool(self._dictionary_frame.winfo_manager())
+
+    def on_toggle_ai(self):
+        """リボンの［AI 連携］のチェックに合わせて、出す・隠す。出すかどうかは、この PC の設定に覚える。"""
+        self.cfg.ai_visible = bool(self.ai_var.get())
+        self._ai_forced = False
+        config.save(self.cfg)
+        self._sync_ai_area()
+
+    def _sync_ai_area(self):
+        """「仮名化する語」の一覧・「AI 連携」の組・エディターの右クリックの［選択範囲を仮名化…］を、出す・隠す。
+
+        ・利用者がチェックを外していれば隠す（設定の ai_visible）。
+        ・仮名化する語がある文書では、チェックに関わらず出し、チェックを外せなくする（どの語を伏せているかが見えないまま、
+          AI に渡す・取り込むことがないように。方針の目的3）。語をすべて解除すれば外せるが、その文書の間は出したままにする。
+        ・自動で出したのは、その文書の間だけ。［閉じる］・［開く］で別の文書になったら、利用者が選んでいた形に戻す
+          （設定は書き換えない。app._load_text が _ai_forced を戻す）。
+        """
+        own = self.__dict__
+        if "_dictionary_frame" not in own or "ai_check" not in own or "_editor_frame" not in own:
+            return                      # 組み立ての途中
+        has_words = bool(self.session.dictionary.entries)
+        if has_words:
+            self._ai_forced = True
+        show = self.cfg.ai_visible or own.get("_ai_forced", False)
+        self.ai_var.set(show)
+        self.ai_check.configure(state="disabled" if has_words else "normal")
+        if "editor_menu" in own:
+            self._set_editor_menu_ai(show)
+        if show == self.ai_shown():
+            return
+        if show:
+            self._dictionary_frame.pack(side="bottom", fill="x", before=self._editor_frame)
+            self._ai_box.pack(before=self.ribbon, **self.AI_BOX_PACK)
+        else:
+            self._dictionary_frame.pack_forget()
+            self._ai_box.pack_forget()
+        self.after_idle(self._align_ribbon_heights)
 
     def on_register(self):
         word = trim_selection(self._selection())

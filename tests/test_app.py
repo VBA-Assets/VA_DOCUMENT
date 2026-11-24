@@ -731,7 +731,9 @@ def test_editor_mark_blinks_when_caret_moves(window, monkeypatch):
     window.update()
     window._layout_pages(keep=False)
     window.update()
-    window.text.focus_force()           # キーの出来事は、フォーカスのある部品に届く
+    # キーの出来事は、フォーカスのある部品に届く。焦点を得られたことを確かめる（2026-11-24、焦点を得られなかった回に、
+    # 点滅しないという形で落ちた。_focus_editor）
+    _focus_editor(window)
     mark = window._editor_mark
 
     def preview_caret_shown():
@@ -1177,6 +1179,39 @@ def test_window_position_is_restored(tmp_path):
     assert geometry == "1100x720+60+70" and abs(int(sash) - 500) <= 2
     # 文書の種類・ページ番号も、前回の設定で始まる
     assert (doc_type, page_number) == ("Naiyou", "TopRight")
+    # ナビゲーションを出して閉じたら、次の起動でも、同じ幅のナビゲーションと同じ幅のプレビューで出す（2026-11-24）
+    # 起動から幅を置き直す間（app.SASH_RESTORE_SECONDS）が過ぎてから操作する
+    # （3つの欄が入るよう、ウィンドウを広げてから。ナビゲーションは、題の行が入る幅〔約 300 画素〕より狭くならない）
+    third = common + ("w.after(2000, w.quit); w.mainloop(); w.geometry('1400x720+60+70'); w.update()\n"
+                      "w.nav_var.set(True); w.on_toggle_navigation(); w.update()\n"
+                      "w.panes.sash_place(1, 780, 0); w.panes.sash_place(0, 320, 0); w.update()\n"
+                      "w.on_close()\n")
+    subprocess.run([sys.executable, "-c", third], check=True, timeout=60)
+    saved = json.loads(settings.read_text(encoding="utf-8"))
+    assert saved["nav_visible"] is True and abs(saved["nav_width"] - 320) <= 2
+    assert abs(saved["preview_width"] - (780 - 326)) <= 2
+    fourth = common + ("w.after(2000, w.quit); w.mainloop()\n"
+                       "print(w.nav_shown(), w.nav_check.cget('text'), w.nav_var.get());"
+                       "print(w.panes.sash_coord(0)[0], w.panes.sash_coord(1)[0]); w.destroy()\n")
+    out = subprocess.run([sys.executable, "-c", fourth], check=True, timeout=60, capture_output=True, text=True,
+                         encoding="utf-8", env={**__import__("os").environ, "PYTHONIOENCODING": "utf-8"}).stdout
+    shown, _, checked, nav, edge = out.split()
+    assert shown == "True" and checked in ("1", "True") and abs(int(nav) - 320) <= 2 and abs(int(edge) - 780) <= 2
+    # プレビューを隠して閉じたら、次の起動でも隠したまま（ナビゲーションは出したまま。2026-11-24）。題の行の高さも、
+    # エディターの上の行にそろう
+    fifth = common + ("w.after(2000, w.quit); w.mainloop()\n"
+                      "w.preview_var.set(False); w.on_toggle_preview(); w.update(); w.on_close()\n")
+    subprocess.run([sys.executable, "-c", fifth], check=True, timeout=60)
+    saved = json.loads(settings.read_text(encoding="utf-8"))
+    assert saved["preview_visible"] is False and abs(saved["preview_width"] - (780 - 326)) <= 2
+    sixth = common + ("w.after(2000, w.quit); w.mainloop()\n"
+                      "print(w.preview_shown(), w.preview_var.get(), w.nav_shown(), len(w.panes.panes()),"
+                      " abs(w._nav_head.winfo_height() - w._name_row.winfo_height()) <= 1, w.panes.sash_coord(0)[0])"
+                      "; w.destroy()\n")
+    out = subprocess.run([sys.executable, "-c", sixth], check=True, timeout=60, capture_output=True, text=True).stdout
+    preview, checked, nav, count, same_height, sash = out.split()
+    assert (preview, checked, nav, count, same_height) == ("False", "False", "True", "2", "True")
+    assert abs(int(sash) - 320) <= 2
 
 
 def test_off_screen_geometry_is_ignored():
@@ -1901,10 +1936,11 @@ def test_options_change_folder_and_editor(window, tmp_path, monkeypatch):
     family = (app.theme.editor_font_choices(window) or [""])[0]
 
     class Answer:
-        def __init__(self, parent, cfg, choices, size_range, spacing_range, prompt, default_prompt):
+        def __init__(self, parent, cfg, choices, size_range, spacing_range, prompt, default_prompt, nav_range):
             assert size_range == (8, 20) and spacing_range == (6, 15) and prompt == default_prompt
+            assert nav_range == (0, 15)
             self.result = {"vamd_folder": str(shared), "font_family": family, "font_size": 14, "line_spacing": 9,
-                           "prompt": None}
+                           "nav_font_family": family, "nav_font_size": 12, "nav_line_spacing": 5, "prompt": None}
     monkeypatch.setattr(app, "OptionsDialog", Answer)
     window.on_options()
     assert window.cfg.vamd_folder == str(shared) and window.cfg.editor_font_size == 14
@@ -1916,11 +1952,24 @@ def test_options_change_folder_and_editor(window, tmp_path, monkeypatch):
     assert int(str(window.text.cget("spacing2"))) == round(9 * window.winfo_fpixels("1p"))     # ポイントを画素に
     saved = app.config.load(app.config.config_path())
     assert (saved.editor_font_size, saved.editor_line_spacing_pt, saved.vamd_folder) == (14, 9, str(shared))
+    # ナビゲーションの書体・字の大きさ・行の間隔（2026-11-24 班長指示）。行の高さは字の高さに行の間隔を足したもの
+    assert (saved.nav_font_family, saved.nav_font_size, saved.nav_line_spacing_pt) == (family, 12, 5)
+    style = tk.ttk.Style(window)
+    font = tkfont.Font(window, font=style.lookup("Nav.Treeview", "font"))
+    assert font.actual("size") == 12 and str(window.nav_tree.cget("style")) == "Nav.Treeview"
+    assert str(window.tree.cget("style")) == "Nav.Treeview"        # 「仮名化する語」の一覧も同じ字（2026-11-24 班長指示）
+    assert int(style.lookup("Nav.Treeview", "rowheight")) == font.metrics("linespace") + round(5 * window.winfo_fpixels("1p"))
+    # （既定）の書体は、エディターとナビゲーションで同じ（2026-11-24 班長指摘）
+    app.theme.apply_nav_prefs(window, "", 9, 3)
+    app.theme.set_editor_prefs("", 14, 9)
+    nav_family = tkfont.Font(window, font=style.lookup("Nav.Treeview", "font")).actual("family")
+    assert nav_family == tkfont.Font(window, font=app.theme.editor_font(window)).actual("family")
     # 新しい文書は、新しい場所に保存する
     monkeypatch.setattr(messagebox, "askyesno", lambda *a, **k: True)
     assert window.on_close_document()
     assert window.session.vamd_path.parent == shared
     window.cfg.editor_font_size, window.cfg.editor_line_spacing_pt, window.cfg.editor_font_family = 11, 6, ""
+    window.cfg.nav_font_size, window.cfg.nav_line_spacing_pt, window.cfg.nav_font_family = 9, 3, ""
     window._apply_editor_prefs()
 
 
@@ -1938,10 +1987,15 @@ def test_close_is_disabled_while_blank(window, monkeypatch):
     assert window.is_blank()
     assert f.entrycget("閉じる", "state") == "disabled" and str(window.close_button.cget("state")) == "disabled"
     assert not window.on_close_document()                          # 白紙のままなら何もしない
+    # ［印刷］も押せず、Ctrl+P でも印刷の画面を開かない（2026-11-24 班長指摘）
+    printing_ok = app.printing.available()
+    assert str(window.print_button.cget("state")) == "disabled"
+    assert window.on_print() is None
     window.text.insert("end", "字。")
     window.text.edit_modified(True)
     window.on_text_modified()
     assert f.entrycget("閉じる", "state") == "normal" and str(window.close_button.cget("state")) == "normal"
+    assert str(window.print_button.cget("state")) == ("normal" if printing_ok else "disabled")
     window.text.focus_force()
     window.update()
     window.text.event_generate("<Control-Key-w>")           # エディターの中で押しても、字を消さずに閉じる
@@ -1988,6 +2042,37 @@ def test_save_dialog_title(window, monkeypatch):
 def test_config_rejects_out_of_range_options():
     cfg = app.config.AppConfig(editor_font_size=99, editor_line_spacing_pt=-3, editor_font_family=5)
     assert (cfg.editor_font_size, cfg.editor_line_spacing_pt, cfg.editor_font_family) == (11, 6, "")
+    cfg = app.config.AppConfig(nav_font_size=True, nav_line_spacing_pt=16, nav_font_family=None)
+    assert (cfg.nav_font_size, cfg.nav_line_spacing_pt, cfg.nav_font_family) == (9, 3, "")
+    assert app.config.AppConfig(nav_line_spacing_pt=0).nav_line_spacing_pt == 0      # ナビゲーションは 0 まで狭められる
+
+
+def test_options_dialog_has_navigation_fonts(window, monkeypatch):
+    """オプションの画面に「ナビゲーション」の枠を置き、エディターと同じく書体・字の大きさ・行の間隔を変えられる
+    （2026-11-24 班長指示）。範囲の外は知らせて受け付けない。"""
+    from va_document import dialogs
+    monkeypatch.setattr(dialogs._Dialog, "run", lambda self: None)
+    errors = []
+    monkeypatch.setattr(messagebox, "showerror", lambda *a, **k: errors.append(a[1]))
+    cfg = app.config.AppConfig(vamd_folder=str(Path.cwd()))
+    dlg = dialogs.OptionsDialog(window, cfg, ["ＭＳ ゴシック"], (8, 20), (6, 15), vamd.PROMPT, vamd.PROMPT, (0, 15))
+    try:
+        frames = [str(f.cget("text")) for f in _widgets(dlg, tk.ttk.Labelframe)]
+        assert frames.index("エディター") + 1 == frames.index("ナビゲーション・仮名化する語")
+        assert (dlg.nav_family.get(), dlg.nav_size.get(), dlg.nav_spacing.get()) == ("（既定）", "9", "3")
+        dlg.nav_spacing.set("16")
+        dlg.accept()
+        assert dlg.result is None and "ナビゲーション・仮名化する語の" in errors[-1]
+        dlg.nav_family.set("ＭＳ ゴシック")
+        dlg.nav_size.set("14")
+        dlg.nav_spacing.set("0")
+        dlg.accept()
+        assert dlg.result["nav_font_family"] == "ＭＳ ゴシック"
+        assert (dlg.result["nav_font_size"], dlg.result["nav_line_spacing"]) == (14, 0)
+        assert dlg.result["font_size"] == cfg.editor_font_size
+    finally:
+        if dlg.winfo_exists():
+            dlg.destroy()
 
 
 def test_config_reads_old_line_spacing_in_pixels(tmp_path):
@@ -2011,10 +2096,11 @@ def test_ai_prompt_in_options(window, tmp_path, monkeypatch):
 
     def answer(prompt_text):
         class Answer:
-            def __init__(self, parent, cfg, choices, size_range, spacing_range, prompt, default_prompt):
+            def __init__(self, parent, cfg, choices, size_range, spacing_range, prompt, default_prompt, nav_range):
                 self.result = {"vamd_folder": cfg.vamd_folder, "font_family": cfg.editor_font_family,
                                "font_size": cfg.editor_font_size, "line_spacing": cfg.editor_line_spacing_pt,
-                               "prompt": prompt_text}
+                               "nav_font_family": cfg.nav_font_family, "nav_font_size": cfg.nav_font_size,
+                               "nav_line_spacing": cfg.nav_line_spacing_pt, "prompt": prompt_text}
         return Answer
     monkeypatch.setattr(app, "OptionsDialog", answer(custom))
     window.on_options()
@@ -3040,3 +3126,395 @@ def test_errors_are_recorded(window, tmp_path, monkeypatch):
         window.report_callback_exception(type(e), e, e.__traceback__)
     assert window.errors.records[-1]["stage"] == "画面の処理" and window.errors.records[-1]["type"] == "KeyError"
     assert "甲野" not in window.diagnostic_text()
+
+
+# ----------------------------------------------------------------------
+# ナビゲーション（見出しの一覧。2026-11-24 班長指示。navigation.py・outline.py）
+# ----------------------------------------------------------------------
+
+# 行：1 表題、3 当事者、6 原告、9 被告、12 請求、15 以上
+NAV_TEXT = (":=: 準備書面\n\n## 当事者\n本文１\n\n### 原告\n原告の本文\n\n### 被告\n被告の本文\n\n## 請求\n本文２\n\n"
+            "--: 以上\n")
+
+
+def _show_navigation(window, show):
+    window.nav_var.set(show)
+    window.on_toggle_navigation()
+    window.update()
+
+
+@pytest.fixture
+def nav_window(window):
+    """ナビゲーションを出した画面（終わったら隠す。ほかの試験に残さない）。"""
+    window.deiconify()
+    window.geometry("1500x800")
+    window._load_text(NAV_TEXT)
+    window.update()
+    _show_navigation(window, True)
+    yield window
+    _show_navigation(window, False)
+    window.withdraw()
+
+
+def _nav_labels(window, parent=""):
+    tree = window.nav_tree
+    return [(tree.item(i, "text"), _nav_labels(window, i)) for i in tree.get_children(parent)]
+
+
+def _nav_image(window, item):
+    image = window.nav_tree.item(item, "image")
+    if isinstance(image, (list, tuple)):
+        return str(image[0]) if image else ""
+    return str(image or "")
+
+
+def _nav_click(window, item, release=True):
+    x, y, _, h = window.nav_tree.bbox(item)
+    window.nav_tree.event_generate("<ButtonPress-1>", x=x + 40, y=y + h // 2)
+    if release:
+        window.nav_tree.event_generate("<ButtonRelease-1>", x=x + 40, y=y + h // 2)
+    window.update()
+
+
+def test_navigation_toggle_and_tree(window):
+    """リボンの「表示」の［ナビゲーション］にチェックを入れたときだけ、一番左に見出しの一覧を出す（エディターの幅は
+    変えない）。見出しはレベルに合わせて木の形に並べ、組んだときと同じ番号を付ける。出すかどうかは設定に覚える。"""
+    window.deiconify()
+    window.geometry("1500x800")
+    window._load_text(NAV_TEXT)
+    window.update()
+    assert not window.nav_shown() and window.nav_check.master is _group(window, "表示").body
+    # 左の列に上から［AI 連携］［プレビュー］［ナビゲーション］、右の列に［蛍光ペン］（2026-11-24 班長指示）
+    marker = next(b for b in _all_buttons(window) if str(b.cget("text")) == "蛍光ペン")
+    place = lambda w: (int(w.grid_info()["column"]), int(w.grid_info()["row"]))
+    assert [place(c) for c in (window.ai_check, window.preview_check, window.nav_check)] == [(0, 0), (0, 1), (0, 2)]
+    assert place(marker) == (1, 0)
+    editor = window._work_pane.winfo_width()
+    _show_navigation(window, True)
+    try:
+        assert [str(p) for p in window.panes.panes()] == [str(window._nav_pane), str(window._preview_pane),
+                                                          str(window._work_pane)]
+        assert abs(window._work_pane.winfo_width() - editor) <= 2
+        assert window.cfg.nav_visible and config.load().nav_visible
+        assert _nav_labels(window) == [("１　当事者", [("(1) 原告", []), ("(2) 被告", [])]), ("２　請求", [])]
+        assert window.nav_tree.winfo_rooty() == window.canvas.winfo_rooty()        # 一覧とプレビューの上端をそろえる
+        scroll = [c for c in _widgets(window._nav_pane, tk.ttk.Scrollbar) if str(c.cget("orient")) == "vertical"]
+        assert scroll and str(window.nav_tree.cget("yscrollcommand"))
+        # 見出しを書き足すと、一覧も変わる。見出しがなければ、その旨を出す
+        window.text.insert("3.0", "## 前置き\n")
+        window.refresh()
+        assert [label for label, _ in _nav_labels(window)] == ["１　前置き", "２　当事者", "３　請求"]
+        assert not window._nav_empty.winfo_ismapped()
+        window._load_text("本文だけ")
+        window.update()
+        assert _nav_labels(window) == [] and window._nav_empty.winfo_ismapped()
+        # 起動し直したときも、覚えた幅で出す
+        assert "ナビゲーション はい" in window.diagnostic_text()
+    finally:
+        _show_navigation(window, False)
+    assert not window.nav_shown() and not config.load().nav_visible
+    assert abs(window._work_pane.winfo_width() - editor) <= 2
+    window.withdraw()
+
+
+def _show_preview(window, show):
+    window.preview_var.set(show)
+    window.on_toggle_preview()
+    window.update()
+
+
+def test_web_document_buttons_and_navigation(window):
+    """文書の種類を「ウェブ文書」にしても、記号のボタン・キーは、ビジネス文書と同じに使える（2026-11-24 班長指示）。
+    行番号・番号1字は付けない。表題（:=:）は H1 の見た目で組むが、見出しではないので、ナビゲーションには載らない。"""
+    from va_document.doctypes import DOC_TYPES, WEB
+    window._load_text(":=: 記事の題\n本文")
+    window.doc_type_box.set(DOC_TYPES[WEB].label)
+    window.on_settings_changed()
+    try:
+        assert window.session.doc_type.web
+        buttons = [b for b in _all_buttons(window.ribbon)]
+        assert buttons and all(str(b.cget("state")) == "normal" for b in buttons)
+        assert str(window.line_numbers_check.cget("state")) == "disabled"
+        assert str(window.one_width_check.cget("state")) == "disabled"
+        window.text.mark_set("insert", "2.0")
+        window.on_align(RIGHT_MARK)                           # Ctrl+R の右揃え
+        assert window.raw_text() == ":=: 記事の題\n--: 本文"
+        window.refresh()
+        from va_document import outline
+        heads = outline.headings(window.raw_text().split("\n"), window.session.doc_type)
+        assert heads == []
+    finally:
+        window.doc_type_box.set(DOC_TYPES["Saiban"].label)
+        window.on_settings_changed()
+
+
+def test_ai_area_toggle(window, monkeypatch):
+    """リボンの「表示」の［AI 連携］のチェックを外すと、「仮名化する語」の一覧・「AI 連携」の組・右クリックの
+    ［選択範囲を仮名化…］を隠す（2026-11-24 班長決定）。仮名化する語がある文書では、自動で出し、チェックを外せない。
+    自動で出したのはその文書の間だけで、新しい文書になったら、利用者が選んでいた形に戻す（設定は書き換えない）。"""
+    window.deiconify()
+    window.update()
+    monkeypatch.setattr(messagebox, "askyesnocancel", lambda *a, **k: False)   # 閉じるときは保存しない
+    menu_labels = lambda: [window.editor_menu.entrycget(i, "label") for i in range(window.editor_menu.index("end") + 1)
+                           if window.editor_menu.type(i) == "command"]
+    # 仮名化する語のある文書（試験の初めの文書）は、出したまま外せない
+    assert window.ai_shown() and window.ai_var.get() and str(window.ai_check.cget("state")) == "disabled"
+    try:
+        assert window.on_close_document()
+        assert window.ai_shown() and str(window.ai_check.cget("state")) == "normal"   # 既定は出す
+        window.ai_var.set(False)
+        window.on_toggle_ai()
+        window.update()
+        assert not window.ai_shown() and not window._ai_box.winfo_ismapped()
+        assert not window._dictionary_frame.winfo_ismapped() and "選択範囲を仮名化…" not in menu_labels()
+        assert not window.cfg.ai_visible and not config.load().ai_visible
+        assert window.ribbon._min_height == max(g.winfo_reqheight() for g in window.ribbon.groups)
+        assert "AI 連携 いいえ" in window.diagnostic_text()
+        # 仮名化する語ができる（そういう文書を開く）と、自動で出し、外せなくする。設定は書き換えない
+        window._load_text("乙山花子の主張。")
+        window.session.dictionary.register("乙山花子", "人名")
+        window._refresh_dictionary()
+        window.update()
+        assert window.ai_shown() and window._ai_box.winfo_ismapped() and window._dictionary_frame.winfo_ismapped()
+        assert window.ai_var.get() and str(window.ai_check.cget("state")) == "disabled"
+        assert "選択範囲を仮名化…" in menu_labels() and not window.cfg.ai_visible
+        # 一覧の位置は、エディターの下（状態の欄の上）のまま
+        assert window._dictionary_frame.winfo_y() > window._editor_frame.winfo_y()
+        assert window.status.winfo_y() > window._dictionary_frame.winfo_y()
+        # 語をすべて解除すると外せるが、その文書の間は出したまま
+        window._unregister(next(iter(window.session.dictionary.entries)))
+        assert window.ai_shown() and str(window.ai_check.cget("state")) == "normal"
+        # 新しい文書になったら、選んでいた形（隠す）に戻る
+        assert window.on_close_document()
+        window.update()
+        assert not window.ai_shown() and not window.ai_var.get()
+    finally:
+        window.ai_var.set(True)
+        window.on_toggle_ai()
+        window.withdraw()
+    assert window.ai_shown() and window.cfg.ai_visible
+
+
+def test_preview_toggle(window, tmp_path, monkeypatch):
+    """リボンの「表示」の［プレビュー］にチェックを入れたときだけ、プレビューを出す（2026-11-24 班長指示）。隠すと、
+    エディターがその分広がり、出すと、覚えた幅で戻る（ナビゲーションの幅は変えない）。隠している間も、組み直し・保存・
+    印刷は働く（ページを画像にするのは、出したときだけ）。3つの欄が入りきる幅で試す（入りきらなければ、エディターの最小の
+    幅を守って、プレビューを狭める）。"""
+    window.deiconify()
+    window.geometry("1700x800")
+    window._load_text(NAV_TEXT)
+    window.update()
+    sash = int(window.panes.cget("sashwidth"))
+    assert window.preview_shown() and window.preview_var.get()
+    editor, preview = window._work_pane.winfo_width(), window._pane_widths()["preview"]
+    laid = []
+    monkeypatch.setattr(window, "_layout_pages", lambda keep=True: laid.append(keep))
+    _show_preview(window, False)
+    try:
+        assert [str(p) for p in window.panes.panes()] == [str(window._work_pane)]
+        assert abs(window._work_pane.winfo_width() - (editor + preview + sash)) <= 2
+        assert not window.cfg.preview_visible and not config.load().preview_visible
+        assert abs(window.cfg.preview_width - preview) <= 2
+        # 隠している間も組み直す（ページを画像にはしない）。保存と印刷もできる
+        window.text.insert("end", "追記。\n")
+        window.refresh()
+        assert not laid and window.session.layout_map is not None
+        window.session.pdf_path = tmp_path / "準備書面.pdf"
+        assert window.on_save() and window.session.pdf_path.exists()
+        printed = []
+        monkeypatch.setattr(file_ops.printing, "available", lambda: True)
+        monkeypatch.setattr(file_ops, "PrintDialog", lambda *a, **k: printed.append(a[1]) or type("D", (), {"result": None})())
+        window.event_generate("<Control-Key-p>")
+        window.update()
+        window.on_print()
+        assert printed and printed[-1][:4] == b"%PDF"
+        assert "プレビュー いいえ" in window.diagnostic_text()
+        # プレビューを隠したまま、ナビゲーションを出す・隠す（エディターの幅で加減する）
+        _show_navigation(window, True)
+        assert [str(p) for p in window.panes.panes()] == [str(window._nav_pane), str(window._work_pane)]
+        nav = window._pane_widths()["nav"]
+        # プレビューを出すと、覚えた幅で、ナビゲーションの右に戻る（ナビゲーションの幅は変えない）。ページも並べ直す
+        _show_preview(window, True)
+        assert [str(p) for p in window.panes.panes()] == [str(window._nav_pane), str(window._preview_pane),
+                                                          str(window._work_pane)]
+        widths = window._pane_widths()
+        assert abs(widths["nav"] - nav) <= 2 and abs(widths["preview"] - preview) <= 2
+        assert laid and window.cfg.preview_visible
+        _show_navigation(window, False)
+        assert [str(p) for p in window.panes.panes()] == [str(window._preview_pane), str(window._work_pane)]
+    finally:
+        _show_navigation(window, False)
+        _show_preview(window, True)
+        window.withdraw()
+
+
+def test_navigation_follows_cursor_and_click_moves_cursor(nav_window):
+    """エディターでカーソルを動かすと、カーソルのある見出しを選ぶ（行の地が青くなる。畳んだ見出しの中なら、畳んだ見出し）。
+    ▼ は付けない（2026-11-24 班長指示）。見出しをクリックすると、エディターのカーソルをその見出しへ動かす。"""
+    w, tree = nav_window, nav_window.nav_tree
+    w.text.mark_set("insert", "7.2")                    # 原告の本文
+    w._show_editor_mark()
+    assert w._nav_current == "h1" and tree.selection() == ("h1",)
+    assert all(not _nav_image(w, i) for i in w._nav_items())          # ▼ などの画像は付けない
+    assert tk.ttk.Style(w).lookup("Nav.Treeview", "background", ["selected"]) == theme.PRESSED_BG
+    for index in ("1.0", "15.0"):                       # 最初の見出しの前・「以上」は、どの見出しにも属さない
+        w.text.mark_set("insert", index)
+        w._show_editor_mark()
+        assert w._nav_current is None and not tree.selection()
+    tree.item("h0", open=False)
+    w.text.mark_set("insert", "10.0")                   # 被告の本文（畳んだ「当事者」の中）
+    w._update_nav_current(force=True)
+    assert w._nav_current == "h0"
+    tree.item("h0", open=True)
+    _nav_click(w, "h3")
+    assert w.text.index("insert") == "12.0" and w._nav_current == "h3"
+    # 選んでいる見出しをもう一度クリックしても、見出しの行へ動かす
+    w.text.mark_set("insert", "13.1")
+    _nav_click(w, "h3")
+    assert w.text.index("insert") == "12.0"
+    assert w.raw_text() == NAV_TEXT                     # クリックでは文章を変えない
+
+
+def test_navigation_expand_and_collapse_all(nav_window):
+    """題の右の［展開］［折りたたむ］（2026-11-24 班長指示。名前は［展開］［折りたたむ］だけ。同日 班長指示）。一覧の見た目だけを変え、
+    文章は変えない。畳んだ見出しの中のカーソルは、外側の見出しを選ぶ。欄は、題の行が入りきる幅より狭くならない。"""
+    w, tree = nav_window, nav_window.nav_tree
+    assert [str(c.cget("text")) for c in w._nav_head.winfo_children()[1:]] == ["展開", "折りたたむ"]
+    assert all(b.cget("image") for b in (w.nav_expand_button, w.nav_collapse_button))         # アイコン付き
+    assert w._nav_pane.winfo_width() >= sum(c.winfo_reqwidth() for c in w._nav_head.winfo_children())
+    w.text.mark_set("insert", "7.2")                    # 原告の本文
+    w._show_editor_mark()
+
+    def states():
+        return str(w.nav_expand_button.cget("state")), str(w.nav_collapse_button.cget("state"))
+    # 押しても何も変わらないボタンは、押せない（灰色。2026-11-24 班長指摘）
+    assert states() == ("disabled", "normal")                   # すべて開いている
+    w.nav_collapse_button.invoke()
+    assert not tree.item("h0", "open") and tree.selection() == ("h0",) and w.raw_text() == NAV_TEXT
+    assert states() == ("normal", "disabled")                   # すべて畳んでいる
+    w.nav_expand_button.invoke()
+    assert tree.item("h0", "open") and tree.selection() == ("h1",)
+    assert states() == ("disabled", "normal")
+    # 見出しの左の三角で1つだけ畳んだ・開いたときも合わせる
+    tree.item("h0", open=False)
+    tree.event_generate("<<TreeviewClose>>")
+    w.update()
+    assert states() == ("normal", "disabled")
+    tree.item("h0", open=True)
+    tree.event_generate("<<TreeviewOpen>>")
+    w.update()
+    assert states() == ("disabled", "normal")
+    # 下のレベルの見出しがなければ、押せない
+    w._load_text("## 一\n## 二")
+    w.update()
+    assert str(w.nav_expand_button.cget("state")) == "disabled" == str(w.nav_collapse_button.cget("state"))
+
+
+def test_navigation_drag_and_drop_moves_section(nav_window):
+    """見出しをドラッグ アンド ドロップすると、属する見出し・本文と一緒に動く（「以上」は動かない）。Ctrl+Z 1回で戻る。"""
+    w, tree = nav_window, nav_window.nav_tree
+    _, top, _, _ = tree.bbox("h0")
+    _nav_click(w, "h3", release=False)
+    x = tree.bbox("h3")[0] + 40
+    tree.event_generate("<B1-Motion>", x=x, y=top + 2)
+    w.update()
+    assert w._nav_drop_line.winfo_ismapped()
+    tree.event_generate("<ButtonRelease-1>", x=x, y=top + 2)
+    w.update()
+    assert w.raw_text() == (":=: 準備書面\n\n## 請求\n本文２\n\n## 当事者\n本文１\n\n### 原告\n原告の本文\n\n"
+                            "### 被告\n被告の本文\n\n--: 以上\n")
+    assert w.text.index("insert") == "3.0" and [label for label, _ in _nav_labels(w)] == ["１　請求", "２　当事者"]
+    assert not w._nav_drop_line.winfo_ismapped() and w.title().startswith("＊")
+    w.nav_tree.event_generate("<<Undo>>")
+    assert w.raw_text() == NAV_TEXT
+    # 自分の範囲の中（自分の子の前）には置けない
+    w.update()
+    assert w._nav_drop_target(0, tree.bbox("h1")[1] + 2) is None
+    # 一覧の下の空いた所に放すと、最後の見出しの後（「以上」の前）へ
+    target, _ = w._nav_drop_target(1, tree.winfo_height() - 5)
+    assert target == 14
+
+
+def test_navigation_insert_and_select(nav_window):
+    """右クリックのメニューの［前に見出しを挿入］［後に見出しを挿入］［小見出しを挿入］［見出しと本文を選択］（2026-11-24
+    班長決定）。挿入は、字のない見出しを入れてエディターのカーソルをそこに置き（続けて打てる）、Ctrl+Z 1回で戻る。"""
+    w, tree = nav_window, nav_window.nav_tree
+    labels = [w.nav_menu.entrycget(i, "label") for i in range(w.nav_menu.index("end") + 1) if w.nav_menu.type(i) == "command"]
+    assert labels == ["レベルを上げる", "レベルを下げる", "前に見出しを挿入", "後に見出しを挿入", "小見出しを挿入",
+                      "見出しと本文を選択", "削除"]
+    _nav_click(w, "h3")                                  # 請求
+    w.nav_menu.invoke("前に見出しを挿入")
+    lines = w.raw_text().split("\n")
+    assert lines[11:14] == ["## ", "", "## 請求"] and w.text.index("insert") == "12.3"
+    assert w.focus_get() is w.text
+    w.text.insert("insert", "前置き")                       # 続けて打てる
+    w.refresh()
+    assert [label for label, _ in _nav_labels(w)] == ["１　当事者", "２　前置き", "３　請求"]
+    w.text.edit_undo()                                   # 打った字を戻す
+    w.nav_tree.event_generate("<<Undo>>")                # 挿入を Ctrl+Z 1回で戻す
+    assert w.raw_text() == NAV_TEXT
+    _nav_click(w, "h0")                                  # 当事者：小見出しは、最後の小見出しの後
+    w.nav_menu.invoke("小見出しを挿入")
+    lines = w.raw_text().split("\n")
+    assert lines[9:13] == ["被告の本文", "", "### ", ""] and w.text.index("insert") == "12.4"
+    w.nav_tree.event_generate("<<Undo>>")
+    _nav_click(w, "h0")
+    w.nav_menu.invoke("後に見出しを挿入")                    # 範囲の後（「請求」の前）
+    assert w.raw_text().split("\n")[11:14] == ["## ", "", "## 請求"]
+    w.nav_tree.event_generate("<<Undo>>")
+    assert w.raw_text() == NAV_TEXT
+    # 見出しと本文を選ぶ（属する見出し・本文。後ろの空行は含めない）
+    _nav_click(w, "h0")
+    w.nav_menu.invoke("見出しと本文を選択")
+    assert w.text.get("sel.first", "sel.last") == "\n".join(NAV_TEXT.split("\n")[2:10])
+    assert w.focus_get() is w.text and w.raw_text() == NAV_TEXT
+    w.text.tag_remove("sel", "1.0", "end")
+
+
+def test_navigation_keys_and_menu(nav_window, monkeypatch):
+    """右クリックのメニュー（レベルを上げる・下げる・削除）と、Alt+Shift+←→・Alt+Shift+↑↓・Delete。どれも属する
+    見出し・本文に及び、Ctrl+Z 1回で戻る。"""
+    w, tree = nav_window, nav_window.nav_tree
+    w.nav_tree.focus_force()
+    w.update()
+    if w.focus_get() is not tree:
+        pytest.skip("一覧がキーボードの焦点を得られなかった（ほかの画面を操作中など）")
+    _nav_click(w, "h0")
+    tree.event_generate("<Alt-Shift-Right>")             # レベルを下げる（属する見出しも）
+    lines = w.raw_text().split("\n")
+    assert (lines[2], lines[5], lines[8], lines[11]) == ("### 当事者", "#### 原告", "#### 被告", "## 請求")
+    assert w.focus_get() is tree and tree.selection() == ("h0",)
+    tree.event_generate("<Alt-Shift-Left>")
+    assert w.raw_text() == NAV_TEXT
+    tree.event_generate("<Alt-Shift-Left>")              # # より上にはしない（見出しが本文に変わらない）
+    tree.event_generate("<Alt-Shift-Left>")
+    assert w.raw_text().split("\n")[2] == "# 当事者" and "できません" in str(w.status.cget("text"))
+    tree.event_generate("<<Undo>>")
+    assert w.raw_text() == NAV_TEXT
+    # Alt+Shift+↓：同じ親の次の見出しと入れ替える
+    _nav_click(w, "h1")
+    tree.event_generate("<Alt-Shift-Down>")
+    lines = w.raw_text().split("\n")
+    assert lines.index("### 被告") < lines.index("### 原告") < lines.index("## 請求")
+    assert tree.item(tree.selection()[0], "text") == "(2) 原告"
+    tree.event_generate("<Alt-Shift-Up>")
+    assert w.raw_text() == NAV_TEXT
+    # Delete：属する見出し・本文ごと消す
+    _nav_click(w, "h0")
+    tree.event_generate("<Delete>")
+    assert w.raw_text() == ":=: 準備書面\n\n## 請求\n本文２\n\n--: 以上\n"
+    assert "Ctrl+Z" in str(w.status.cget("text"))
+    tree.event_generate("<<Undo>>")
+    assert w.raw_text() == NAV_TEXT
+    # 右クリックのメニュー：上げられない見出しでは［レベルを上げる］を押せない
+    shown = []
+    monkeypatch.setattr(w.nav_menu, "tk_popup", lambda x, y: shown.append(
+        {label: str(w.nav_menu.entrycget(label, "state")) for label in ("レベルを上げる", "レベルを下げる", "削除")}))
+    w._load_text("# 一\n## 二\n本文")
+    w.update()
+    x, y, _, h = tree.bbox("h0")
+    tree.event_generate("<Button-3>", x=x + 40, y=y + h // 2)
+    assert shown[-1] == {"レベルを上げる": "disabled", "レベルを下げる": "normal", "削除": "normal"}
+    assert w.text.index("insert") == "1.0"
+    w.nav_menu.invoke("レベルを下げる")
+    assert w.raw_text() == "## 一\n### 二\n本文"
