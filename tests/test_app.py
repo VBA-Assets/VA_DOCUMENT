@@ -10,11 +10,11 @@ tk = pytest.importorskip("tkinter")
 
 from tkinter import messagebox  # noqa: E402
 
-from va_document import ai_ops, app, config, diagnostics, editor_mark, file_ops, preview, theme, vamd  # noqa: E402
+from va_document import ai_ops, app, config, diagnostics, file_ops, preview, theme, vamd  # noqa: E402
 from va_document.document import (BULLET_MARK, CENTER_MARK, HEADING_BUTTON_MARK, PAGE_BREAK_MARK,  # noqa: E402
                                   RIGHT_MARK)
 from va_document.pdfwriter import read_id  # noqa: E402
-from va_document.editor_mark import EDITOR_MARK_WATCH_MS  # noqa: E402
+from va_document.current_line import CURRENT_LINE_TAG, CURRENT_LINE_WATCH_MS  # noqa: E402
 
 TEXT = "原告　甲野太郎\n:=: 準備書面（１）\n# 認否\n甲野太郎の主張は争う。\n"
 PSEUDO = TEXT.replace("甲野太郎", "〔人名Ａ〕")      # エディターは常に仮名（2026-10-24 班長決定）
@@ -663,7 +663,6 @@ def _canvas_point(window, line, col):
 
 def test_editor_and_preview_are_linked(window, monkeypatch):
     """エディターのカーソル → 確認表示のページ、確認表示のクリック → エディターのカーソル。"""
-    monkeypatch.setattr(editor_mark, "EDITOR_MARK_BLINK_MS", 0)     # ▼ の点滅は別の試験で確かめる
     window.deiconify()
     window.geometry("1200x800")
     text = (Path(__file__).parent / "data" / "長い文書" / "見本.md").read_text(encoding="utf-8")
@@ -696,13 +695,13 @@ def test_editor_and_preview_are_linked(window, monkeypatch):
     window.update()
     window.on_preview_click(_Click(x, y))
     assert window.text.index("insert") == f"{line + 1}.{col}"
-    # 文書の終わりの近くの行も、エディターに見え（3分の1の高さまでは送れない）、▼ が出る（2026-10-26 班長指摘。
+    # 文書の終わりの近くの行も、エディターに見え（3分の1の高さまでは送れない）、その行を強調する（2026-10-26 班長指摘。
     # 一番上まで送れないのに決まった高さだけ戻していたため、行が下の端から外れていた）
     window.update()
     info = window.text.dlineinfo("insert")
     assert info is not None and info[1] + info[3] <= window.text.winfo_height()
-    assert window._editor_mark.winfo_ismapped()
-    # 動かした先は、エディターの上から3分の1の高さに送り（見えていた行でも）、カーソルの上に ▼ を出す
+    assert _on_current_line(window)
+    # 動かした先は、エディターの上から3分の1の高さに送り（見えていた行でも）、その行を強調する
     view_h = window.text.winfo_height()
     for scroll_to in (0.0, None):       # 見えていない行へ動かすとき、見えている行へ動かすとき
         if scroll_to is not None:
@@ -716,103 +715,98 @@ def test_editor_and_preview_are_linked(window, monkeypatch):
         window.update()
         info = window.text.dlineinfo("insert")
         assert info is not None and abs(info[1] - view_h // 3) <= info[3]
-        mark = window._editor_mark
-        assert mark.winfo_ismapped()
-        box = window.text.bbox("insert")
-        assert abs(mark.winfo_x() + mark.winfo_width() / 2 - box[0]) <= 1     # カーソル（字と字の間）の上
-        assert mark.winfo_y() + mark.winfo_height() == box[1]
-    # ▼ は常に出しておき、カーソルと一緒に動かす（送ったとき・カーソルを動かしたとき・字を打ったとき）。
-    # カーソルが見えないところへ送ったときだけ消す
-    def mark_on_caret():
-        window.update()
-        box = window.text.bbox("insert")
-        return (mark.winfo_ismapped() and box is not None
-                and abs(mark.winfo_x() + mark.winfo_width() / 2 - box[0]) <= 1
-                and mark.winfo_y() + mark.winfo_height() == box[1])
+        assert _on_current_line(window)
+    # 強調する行は、カーソルと一緒に動かす（送ったとき・カーソルを動かしたとき・字を打ったとき）
     window.text.yview_scroll(2, "units")
-    assert mark_on_caret()
-    window.text.mark_set("insert", "insert +3c")
-    window.text.event_generate("<KeyRelease>", keysym="Right")
-    assert mark_on_caret()
+    assert _on_current_line(window)
+    window.text.mark_set("insert", "insert +1line")
+    window.text.event_generate("<KeyRelease>", keysym="Down")
+    assert _on_current_line(window)
     window.text.insert("insert", "あいう")
-    assert mark_on_caret()
+    assert _on_current_line(window)
     window.text.delete("insert -3c", "insert")
-    window.text.yview_moveto(0)
-    window.update()
-    assert window.text.bbox("insert") is None and not mark.winfo_ismapped()
-    window.text.see("insert")
-    assert mark_on_caret()
+    assert _on_current_line(window)
     # 検索などでプログラムがカーソルだけを動かしたとき（出来事が来ない）も、しばらくすると置き直す
-    window.text.mark_set("insert", "insert linestart")
-    end = time.monotonic() + (EDITOR_MARK_WATCH_MS + 200) / 1000
+    window.text.mark_set("insert", "insert -2line")
+    end = time.monotonic() + (CURRENT_LINE_WATCH_MS + 200) / 1000
     while time.monotonic() < end:
         window.update()
-    assert mark_on_caret()
+    assert _on_current_line(window)
     window.withdraw()
 
 
-def test_editor_mark_blinks_when_caret_moves(window, monkeypatch):
-    """カーソルを動かしたときは ▼ を点滅させてから出したままにし、字を打ったときは点滅させない。確認表示の ▼ も
-    同時に点滅させる（2026-10-26 班長指示）。"""
-    monkeypatch.setattr(editor_mark, "EDITOR_MARK_BLINK_MS", 400)
-    monkeypatch.setattr(editor_mark, "EDITOR_MARK_BLINK_STEP_MS", 50)
+def _on_current_line(window):
+    """エディターの現在行の強調表示が、カーソルのある行（改行まで）だけに付いているか。キーの出来事は焦点のある部品に
+    しか届かないので、届かなかったときは見回り（CURRENT_LINE_WATCH_MS ごと）で置き直すのを待つ。"""
+    def ok():
+        ranges = window.text.tag_ranges(CURRENT_LINE_TAG)
+        line = int(window.text.index("insert").split(".")[0])
+        return (len(ranges) == 2 and window.text.index(ranges[0]) == f"{line}.0"
+                and window.text.index(ranges[1]) == window.text.index(f"{line}.0 +1line"))
+    end = time.monotonic() + (CURRENT_LINE_WATCH_MS + 200) / 1000
+    window.update()
+    while not ok() and time.monotonic() < end:
+        window.update()
+    return ok()
+
+
+def test_current_line_is_highlighted(window):
+    """エディター・プレビューは、カーソルのある行の地を薄い灰色にする（青い ▼ と、その点滅は廃止した。2026-11-27 班長指示）。"""
     window.deiconify()
     window.geometry("1200x800")
+    window._load_text("１行目の本文\n# 見出し\n==蛍光ペン==の行\n" + "４行目の長い段落。" * 12 + "\n")
     window.update()
     window._layout_pages(keep=False)
     window.update()
-    # キーの出来事は、フォーカスのある部品に届く。焦点を得られたことを確かめる（2026-11-24、焦点を得られなかった回に、
-    # 点滅しないという形で落ちた。_focus_editor）
-    _focus_editor(window)
-    mark = window._editor_mark
-
-    def preview_caret_shown():
-        items = window.canvas.find_withtag("caret")
-        assert items                                                    # 確認表示の ▼ がある
-        return window.canvas.itemcget(items[0], "state") != "hidden"
-
-    def run(ms):
-        end = time.monotonic() + ms / 1000
-        while time.monotonic() < end:
-            window.update()
-
-    def settle():
-        run(EDITOR_MARK_WATCH_MS + 100)     # プログラムで動かしただけ（出来事がない）なら、見回りで知るまで
-        end = time.monotonic() + 3          # 前の試験で始まった点滅（2秒）が残っていることがある
-        while window._blink_job is not None and time.monotonic() < end:
-            window.update()
-        run(100)
-        assert window._blink_job is None and mark.winfo_ismapped()      # 点滅が終われば出したまま
-        assert preview_caret_shown()
-
-    window.text.mark_set("insert", "2.0")
-    window.text.see("insert")
-    settle()
-    # カーソルを動かす（矢印キー・確認表示を押す）と点滅する
-    window.text.mark_set("insert", "2.2")
-    window.text.event_generate("<KeyRelease>", keysym="Right")
+    text = window.text
+    assert text.tag_cget(CURRENT_LINE_TAG, "background") == theme.CURRENT_LINE_BG == "#f6f6f6"     # Claude のエディターと同じ濃さ
+    # ほかの印（蛍光ペン・仮名化した語・検索・選んだ字）の下に置く（それらの色が見える）
+    assert text.tag_names()[0] == CURRENT_LINE_TAG
+    # ▼ の描画欄は置かない
+    assert not [c for c in text.winfo_children() if isinstance(c, tk.Canvas)]
+    for index in ("2.1", "3.0", "1.3"):
+        text.mark_set("insert", index)
+        text.event_generate("<KeyRelease>", keysym="Down")
+        assert _on_current_line(window)
+    # 行の頭に字を打つ・改行で行を分ける・行をつなぐときも、カーソルのある行だけを強調する
+    text.mark_set("insert", "2.0")
+    window._show_current_line()
+    for edit in (lambda: text.insert("insert", "あ"), lambda: text.insert("insert", "\n"),
+                 lambda: text.delete("insert -1c")):
+        edit()
+        text.event_generate("<KeyRelease>", keysym="a")
+        assert _on_current_line(window)
+    # プレビュー：カーソルのある段落（エディターの1行）を組んだ行の全部の帯を、地を灰色にした画像で重ねる（▼ は描かない。
+    # 段落全体にするのは、エディターの現在行と同じ範囲を示すため。2026-11-27 班長指示）
+    window.refresh()
     window.update()
-    assert window._blink_job is not None
-    seen = set()
-    end = time.monotonic() + 0.3
-    while time.monotonic() < end:
+    m = window.session.layout_map
+    for col in (1, 100):                # 段落の初めの行・終わりの行のどちらにカーソルがあっても同じ
+        text.mark_set("insert", f"4.{col}")
+        window._show_caret(scroll=False)
         window.update()
-        seen.add((bool(mark.winfo_ismapped()), preview_caret_shown()))
-    assert seen == {(True, True), (False, False)}                       # 両方そろって点滅する
-    # 点滅の途中で確認表示の ▼ を描き直しても（カーソルの字のページを出し直すときなど）、そろったまま
-    window._set_mark_visible(False)
+        items = window.canvas.find_withtag("caret")
+        assert len(items) == 1 and window.canvas.type(items[0]) == "image"
+        assert not [i for i in window.canvas.find_all() if window.canvas.type(i) == "polygon"]
+        z = window._render_zoom
+        [(page, top, h)] = m.paragraph_bands(3, col)
+        assert h > 2.5 * m.locate(3, col)[3]                               # 3行以上に組んだ段落の全部
+        assert window.canvas.coords(items[0]) == [window._page_x, window._page_tops[page] + round(top * z)]
+        image = window._caret_images[0]
+        assert abs(image.height() - h * z) <= 1 and image.width() == window._page_pixels[page].width
+    gray = tuple(int(theme.CURRENT_LINE_BG[i:i + 2], 16) for i in (1, 3, 5))
+    assert tuple(image.get(1, image.height() // 2)) == gray            # 左の余白（字のない所）は灰色
+    darkest = min(sum(image.get(xx, yy)) for xx in range(0, image.width(), 2) for yy in range(0, image.height(), 2))
+    assert darkest < sum(gray) // 2                                     # 字は暗いまま（灰色に埋もれない）
+    # 行を変えると、帯も動く
+    text.mark_set("insert", "1.0")
     window._show_caret(scroll=False)
-    assert not preview_caret_shown()
-    settle()
-    # 字を打つ（カーソルも動く）ときは点滅させない
-    window.text.insert("insert", "あ")
-    window.text.event_generate("<KeyRelease>", keysym="a")
     window.update()
-    assert window._blink_job is None and mark.winfo_ismapped()
-    window.text.delete("insert -1c")
-    window.update()
-    assert window._blink_job is None
+    items = window.canvas.find_withtag("caret")
+    page, x, top, h = window.session.layout_map.locate(0, 0)
+    assert len(items) == 1 and window.canvas.coords(items[0])[1] == window._page_tops[page] + round(top * z)
     window.withdraw()
+
 
 def test_linking_converts_token_lengths(window):
     """エディターは仮名なので、記号と元の語の長さの違いを換算して確認表示と連動する。"""
@@ -1974,8 +1968,8 @@ def test_options_change_folder_and_editor(window, tmp_path, monkeypatch):
     monkeypatch.setattr(app, "OptionsDialog", Answer)
     window.on_options()
     assert window.cfg.vamd_folder == str(shared) and window.cfg.editor_font_size == 14
-    assert str(window.doc_id_label.cget("text")) == f"構文（VAMD）ファイル：{window.session.doc_id}.vamd"   # 保存した文書
-    assert str(window.pdf_name_label.cget("text")) == "書式付き（PDF）ファイル：準備書面.pdf"
+    assert str(window.doc_id_label.cget("text")) == f"エディター：{window.session.doc_id}.vamd"   # 保存した文書
+    assert str(window.pdf_name_label.cget("text")) == "プレビュー：準備書面.pdf"
     assert window.session.vamd_path == old                      # 今の文書は、これまでの構文ファイル
     from tkinter import font as tkfont
     assert tkfont.Font(window, font=window.text.cget("font")).actual("size") == 14
@@ -2051,12 +2045,12 @@ def test_close_document_starts_new_one(window, monkeypatch):
     assert not yesno
     assert window.session.doc_id != old_id and window.raw_text() == "" and window.winfo_exists()
     # 閉じた後（エディターが空）は「開かれていません」、書いたが保存していなければ「保存していません」
-    assert str(window.doc_id_label.cget("text")) == "構文（VAMD）ファイル：（開かれていません）"
-    assert str(window.pdf_name_label.cget("text")) == "書式付き（PDF）ファイル：（開かれていません）"
+    assert str(window.doc_id_label.cget("text")) == "エディター：（開かれていません）"
+    assert str(window.pdf_name_label.cget("text")) == "プレビュー：（開かれていません）"
     window.text.insert("1.0", "本文。")
     window.on_text_modified()
-    assert str(window.doc_id_label.cget("text")) == "構文（VAMD）ファイル：（保存していません）"
-    assert str(window.pdf_name_label.cget("text")) == "書式付き（PDF）ファイル：（保存していません）"
+    assert str(window.doc_id_label.cget("text")) == "エディター：（保存していません）"
+    assert str(window.pdf_name_label.cget("text")) == "プレビュー：（保存していません）"
     assert not window.tree.get_children()
 
 
@@ -2088,11 +2082,11 @@ def test_options_dialog_has_navigation_fonts(window, monkeypatch):
     dlg = dialogs.OptionsDialog(window, cfg, ["ＭＳ ゴシック"], (8, 20), (6, 15), vamd.PROMPT, vamd.PROMPT, (0, 15))
     try:
         frames = [str(f.cget("text")) for f in _widgets(dlg, tk.ttk.Labelframe)]
-        assert frames.index("エディター") + 1 == frames.index("ナビゲーション・仮名化する語")
+        assert frames.index("エディター") + 1 == frames.index("ナビゲーション・仮名リスト")
         assert (dlg.nav_family.get(), dlg.nav_size.get(), dlg.nav_spacing.get()) == ("（既定）", "9", "3")
         dlg.nav_spacing.set("16")
         dlg.accept()
-        assert dlg.result is None and "ナビゲーション・仮名化する語の" in errors[-1]
+        assert dlg.result is None and "ナビゲーション・仮名リストの" in errors[-1]
         dlg.nav_family.set("ＭＳ ゴシック")
         dlg.nav_size.set("14")
         dlg.nav_spacing.set("0")
@@ -2242,15 +2236,15 @@ def test_pdf_name_is_shortened(window, tmp_path):
     window._update_title()
     window.update()
     shown = str(window.pdf_name_label.cget("text"))
-    assert shown.endswith("…") and f"書式付き（PDF）ファイル：{name}".startswith(shown[:-1])
-    assert window._pdf_name_tip.text == f"書式付き（PDF）ファイル：{name}"
+    assert shown.endswith("…") and f"プレビュー：{name}".startswith(shown[:-1])
+    assert window._pdf_name_tip.text == f"プレビュー：{name}"
     row = window._pdf_name_row
     assert window.print_button.winfo_x() + window.print_button.winfo_width() <= window.page_label.winfo_x()
     assert window.page_label.winfo_x() + window.page_label.winfo_width() <= row.winfo_width()
     window.session.pdf_path = tmp_path / "準備書面.pdf"
     window._update_title()
     window.update()
-    assert str(window.pdf_name_label.cget("text")) == "書式付き（PDF）ファイル：準備書面.pdf"
+    assert str(window.pdf_name_label.cget("text")) == "プレビュー：準備書面.pdf"
     assert window._pdf_name_tip.text == ""          # 省かないときは、重ねても出さない
     window.session.pdf_path, window.session.version = None, 0
     window.withdraw()
@@ -3379,17 +3373,34 @@ def test_preview_toggle(window, tmp_path, monkeypatch):
 
 
 def test_navigation_follows_cursor_and_click_moves_cursor(nav_window):
-    """エディターでカーソルを動かすと、カーソルのある見出しを選ぶ（行の地が青くなる。畳んだ見出しの中なら、畳んだ見出し）。
+    """エディターでカーソルを動かすと、カーソルのある見出しを選ぶ（行の地が薄い灰色になる。畳んだ見出しの中なら、畳んだ見出し）。
     ▼ は付けない（2026-11-24 班長指示）。見出しをクリックすると、エディターのカーソルをその見出しへ動かす。"""
     w, tree = nav_window, nav_window.nav_tree
     w.text.mark_set("insert", "7.2")                    # 原告の本文
-    w._show_editor_mark()
+    w._show_current_line()
     assert w._nav_current == "h1" and tree.selection() == ("h1",)
     assert all(not _nav_image(w, i) for i in w._nav_items())          # ▼ などの画像は付けない
-    assert tk.ttk.Style(w).lookup("Nav.Treeview", "background", ["selected"]) == theme.PRESSED_BG
+    # カーソルのある見出しの地は、エディターの現在行と同じ薄い灰色。仮名リストの選んだ行も同じ（2026-11-27 班長指示）
+    style = tk.ttk.Style(w)
+    for t in (tree, w.tree):
+        assert style.lookup(str(t.cget("style")), "background", ["selected"]) == theme.CURRENT_LINE_BG
+    # 仮名リストの題と列の見出し（同日 班長指示。それまでは「仮名化する語」「記号」）
+    assert [w.tree.heading(c, "text") for c in ("token", "word", "kind")] == ["仮名", "元の語", "種別"]
+    # 見出し行は、地の色を付けず（白）、下に細い線を1本引く（選んだ行の灰色と見分ける。同日 班長指示）
+    assert style.layout("Nav.Treeview.Heading")[0][0] == theme.HEADING_ELEMENT
+    image = theme._heading_images[w.tk]
+    # 画像は見出しより大きくする（1画素の画像だと敷き詰めて描くのに時間がかかり、行を選ぶたびに 0.5 秒ほど待たされた。
+    # 同日 班長指摘）
+    assert (image.width(), image.height()) == theme.HEADING_TILE
+    assert image.width() >= w.tree.winfo_width() // 2 and image.height() >= 2 * w.tree.bbox(w.tree.get_children()[0])[3]
+    assert "#%02x%02x%02x" % tuple(image.get(0, 0)) == theme.FIELD_BG
+    assert "#%02x%02x%02x" % tuple(image.get(0, image.height() - 1)) == theme.BORDER
+    labels = [str(c.cget("text")) for c in w.tree.master.master.winfo_children()[0].winfo_children()
+              if isinstance(c, tk.ttk.Label)]
+    assert labels[0] == "仮名リスト"
     for index in ("1.0", "15.0"):                       # 最初の見出しの前・「以上」は、どの見出しにも属さない
         w.text.mark_set("insert", index)
-        w._show_editor_mark()
+        w._show_current_line()
         assert w._nav_current is None and not tree.selection()
     tree.item("h0", open=False)
     w.text.mark_set("insert", "10.0")                   # 被告の本文（畳んだ「当事者」の中）
@@ -3413,7 +3424,7 @@ def test_navigation_expand_and_collapse_all(nav_window):
     assert all(b.cget("image") for b in (w.nav_expand_button, w.nav_collapse_button))         # アイコン付き
     assert w._nav_pane.winfo_width() >= sum(c.winfo_reqwidth() for c in w._nav_head.winfo_children())
     w.text.mark_set("insert", "7.2")                    # 原告の本文
-    w._show_editor_mark()
+    w._show_current_line()
 
     def states():
         return str(w.nav_expand_button.cget("state")), str(w.nav_collapse_button.cget("state"))

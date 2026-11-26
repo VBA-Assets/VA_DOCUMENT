@@ -1,5 +1,5 @@
 """エディター（入力欄）の操作：配置・改ページなどの記号、見出しのレベル、標準、記号の色付け、貼り付け、検索
-（カーソルの上の ▼ と行への送りは editor_mark.py、表のセルの配置は table_ops.py、画像の挿入は image_ops.py）。
+（現在行の強調表示と行への送りは current_line.py、表のセルの配置は table_ops.py、画像の挿入は image_ops.py）。
 
 メインの画面（app.MainWindow）の部品（mixin）。self.text（tk.Text）・self.session などは MainWindow が持つ。
 """
@@ -16,7 +16,7 @@ from .document import (ALIGN_MARKS, BLANK, BULLET, BULLET_MARK, CELL_ALIGN_RE, C
                        cell_separators, image_mark, has_inline_marks, inline_mark_spans, is_line_mark, is_table_line, lead_mark_len,
                        leading_wrap,
                        move_wraps_after_marks, parse, remove_bold, split_inline, split_lead_marks)
-from .editor_mark import EditorMarkMixin
+from .current_line import CurrentLineMixin
 from .find_dialog import FindDialog
 from .image_ops import ImageMixin
 from .layout import is_half
@@ -25,8 +25,8 @@ from .table_ops import TableCellMixin
 from .undo import undoable
 
 
-class EditorMixin(EditorMarkMixin, TableCellMixin, ImageMixin):
-    """エディターの操作（MainWindow に混ぜて使う）。カーソルの上の ▼ は editor_mark.py、表のセルの操作は table_ops.py、
+class EditorMixin(CurrentLineMixin, TableCellMixin, ImageMixin):
+    """エディターの操作（MainWindow に混ぜて使う）。現在行の強調表示は current_line.py、表のセルの操作は table_ops.py、
     画像の操作は image_ops.py。"""
 
     def _highlight(self):

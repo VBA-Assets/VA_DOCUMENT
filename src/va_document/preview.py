@@ -13,8 +13,9 @@ from .pseudonym import TOKEN_RE
 
 
 PAGE_GAP = 12               # 確認表示のページの間（画素）
-CARET_SIZE, CARET_MIN_SIZE = 5, 4   # 確認表示の印（▼）の幅の半分（ポイント×表示倍率。小さくしすぎない画素）
 PREVIEW_SCROLL_STEP = 20    # ホイール1目盛り＝3単位で送る画素
+CARET_DELAY_MS = 50         # キーでカーソルを動かしてから、プレビューの現在行を描き直すまでの待ち（ミリ秒。2026-11-27 に
+                            # 120 から短くした。マウスで押したときは待たない）
 
 
 class PreviewMixin:
@@ -74,6 +75,7 @@ class PreviewMixin:
         self._page_x = 0
         self._page_tops = [k * (ph + PAGE_GAP) for k in range(len(doc))]
         self._page_images = {}
+        self._page_pixels = {}      # ページの画像（Pillow。現在行の帯を切り出す。_show_caret）
         self._render_zoom = zoom
         self.canvas.delete("all")
         # 用紙は欄の幅いっぱいなので、左右の線は引かず、ページとページの境目だけを線で示す（最初のページの上と
@@ -88,10 +90,10 @@ class PreviewMixin:
         self._render_visible()
         self._show_caret(scroll=False)
 
-    def _schedule_caret(self):
+    def _schedule_caret(self, delay=CARET_DELAY_MS):
         if self._caret_job is not None:
             self.after_cancel(self._caret_job)
-        self._caret_job = self.after(120, self._show_caret)
+        self._caret_job = self.after(delay, self._show_caret)
 
     def _cursor_real(self):
         """エディターのカーソルの位置を、実名の文章の (行, 字) にする（エディターは仮名なので、記号と元の語の長さの
@@ -126,9 +128,16 @@ class PreviewMixin:
         return r + (col - v) if to_real else v + (col - r)
 
     def _show_caret(self, scroll=True):
-        """カーソルの字の位置に、確認表示で印を付ける。scroll なら、見えていないときにそのページへ送る。"""
+        """カーソルのある段落（エディターの現在行と同じ範囲）を組んだ行の地を、エディターの現在行と同じ薄い灰色にする。
+        scroll なら、カーソルの字が見えていないときに、そのページへ送る。
+
+        はじめは、カーソルの字の上に青い ▼ を付けていた（2026-10-23 班長決定）が、2026-11-27 班長指示で、エディター・
+        ナビゲーションと同じ現在行の強調表示に改めた（同日、班長の指示で、組んだ1行ではなく段落全体にした）。ページの画像は
+        白地なので、段落の帯を切り出し、地を灰色にした画像を上に重ねる（字・蛍光ペン・仮名化した語の色は、そのまま見える）。
+        """
         self._caret_job = None
         self.canvas.delete("caret")
+        self._caret_images, self._caret_bands = [], []
         if not self.preview_shown():
             return
         m = self.session.layout_map
@@ -142,25 +151,39 @@ class PreviewMixin:
         if page >= len(self._page_tops):
             return
         z = self._render_zoom
-        cx =self._page_x + x * z
         cy = self._page_tops[page] + top * z
-        # 印は、入力カーソルと同じ位置（字と字の間）の上の ▼（縦棒だと、確認表示に入力できるように見えるため。
-        # 2026-10-23 班長決定）
-        char_top = cy + (h - m.ts.font_size) / 2 * z
-        s = max(CARET_MIN_SIZE, CARET_SIZE * z)
-        # エディターの ▼ が点滅の途中（消えているところ）なら、確認表示の ▼ も消した形で描く（そろえて点滅させる）
-        self.canvas.create_polygon(cx - s, char_top - s * 1.6, cx + s, char_top - s * 1.6, cx, char_top - 1,
-                                   fill=theme.ACCENT, outline="", tags="caret",
-                                   state="hidden" if self._blink_hidden else "normal")
         if scroll:
             view_top, view_h = self.canvas.canvasy(0), self.canvas.winfo_height()
             if cy < view_top or cy + h * z > view_top + view_h:
                 self.canvas.yview_moveto(max(0.0, (cy - view_h / 3) / self._total_height()))
                 self._render_visible()
+        self._caret_bands = [b for b in m.paragraph_bands(*pos) if b[0] < len(self._page_tops)]
+        self._draw_caret_bands()
 
-    def _set_preview_caret_visible(self, visible):
-        """確認表示の ▼ を、出す・消す（エディターの ▼ と一緒に点滅させる。2026-10-26 班長指示）。"""
-        self.canvas.itemconfigure("caret", state="normal" if visible else "hidden")
+    def _draw_caret_bands(self):
+        """現在行（段落）の帯を描き直す（ページの画像がまだないページの帯は、画像にしたときに描く。_render_visible）。"""
+        self.canvas.delete("caret")
+        self._caret_images = []
+        from PIL import Image, ImageChops
+        z = self._render_zoom
+        for page, top, h in getattr(self, "_caret_bands", []):
+            pixels = self._page_pixels.get(page)
+            if pixels is None:
+                continue
+            y0 = max(0, round(top * z))
+            y1 = min(pixels.height, max(y0 + 1, round((top + h) * z)))
+            if y1 <= y0:
+                continue
+            band = pixels.crop((0, y0, pixels.width, y1))
+            gray = Image.new("RGB", band.size, theme.CURRENT_LINE_BG)
+            # 白は灰色に、字の黒は黒のままになる（掛け合わせ）
+            image = tk.PhotoImage(data=_png(ImageChops.multiply(band, gray)))
+            self._caret_images.append(image)
+            self.canvas.create_image(self._page_x, self._page_tops[page] + y0, image=image, anchor="nw", tags="caret")
+
+    def _drawn_caret_pages(self):
+        """帯を描いたページ（canvas の高さから求める）。"""
+        return {self._page_at(self.canvas.coords(i)[1]) for i in self.canvas.find_withtag("caret")}
 
     def on_preview_click(self, event):
         """確認表示でクリックした字の位置に、エディターのカーソルを動かす。"""
@@ -187,7 +210,7 @@ class PreviewMixin:
         self.text.mark_set("insert", index)
         self._scroll_to_third(index)
         self.text.focus_set()
-        self._schedule_editor_mark()
+        self._schedule_current_line()
         self._show_caret(scroll=scroll)
 
     def _on_yscroll(self, first, last):
@@ -201,12 +224,18 @@ class PreviewMixin:
         top = self.canvas.canvasy(0)
         bottom = self.canvas.canvasy(self.canvas.winfo_height())
         ph = self._page_size[1]
+        rendered = False
         for k, y in enumerate(self._page_tops):
             if y + ph < top - ph or y > bottom + ph or k in self._page_images:
                 continue
-            self._page_images[k] = tk.PhotoImage(data=doc.render(k, self._render_zoom).png())
+            pixels = doc.render(k, self._render_zoom)
+            self._page_pixels[k] = pixels.image().convert("RGB")
+            self._page_images[k] = tk.PhotoImage(data=pixels.png())
             self.canvas.create_image(self._page_x, y, image=self._page_images[k], anchor="nw")
-            self.canvas.tag_raise("caret")
+            rendered = True
+        if rendered and any(b[0] not in self._drawn_caret_pages() for b in getattr(self, "_caret_bands", [])):
+            self._draw_caret_bands()        # 画像にしたページに、まだ描いていない帯があれば描く
+        self.canvas.tag_raise("caret")
         # 表示中のページ：確認表示の真ん中にあるページ（一番上・一番下まで送ったときは、最初・最後のページ）
         if self.canvas.yview()[0] <= 0:
             self._preview_page = 0
@@ -227,3 +256,11 @@ class PreviewMixin:
             if t - PAGE_GAP <= y:
                 k = i
         return k
+
+
+def _png(image):
+    """Pillow の画像を、Tk の PhotoImage に渡す PNG のバイト列にする（画面に出すだけなので、圧縮は軽くする）。"""
+    import io
+    buf = io.BytesIO()
+    image.save(buf, "PNG", compress_level=1)
+    return buf.getvalue()

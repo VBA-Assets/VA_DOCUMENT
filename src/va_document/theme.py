@@ -21,6 +21,11 @@ DISABLED_TEXT = "#a0a0a0"
 # 登録した語・記号の印（入力欄で伏せ漏れを目で確かめるための、2つ目の差し色）
 REGISTERED_BG = "#d9f2d9"     # 薄い緑（蛍光ペンの黄と見分ける。確認表示の仮名化した語の地も同じ色。2026-10-24）
 HIGHLIGHT_BG = "#ffff00"     # 蛍光ペン（==文字==。Word の蛍光ペンの黄と同じ）
+# 現在行の強調表示（エディター・プレビューのカーソルのある行と、ナビゲーション・仮名リストの選んだ行の地。薄い灰色。
+# 淡い青だと、マークダウンの記号の青い字が見えにくくなるため。2026-11-27 班長指示）。濃さは、Claude のアプリの
+# エディター（Monaco。明るい画面の editor.lineHighlightBackground）の #1a1a1a0a〔#1a1a1a を 10/255 の濃さで重ねる〕を
+# 白い地に重ねた色（同日 班長指示「Claude と同じ濃さに」。はじめは #ebebeb で、濃すぎた）
+CURRENT_LINE_BG = "#f6f6f6"
 # 検索で見つかった語（すべて）と、今選んでいる1か所
 FOUND_BG = PRESSED_BG
 CURRENT_FOUND_BG, CURRENT_FOUND_FG = ACCENT, "#ffffff"
@@ -85,7 +90,8 @@ def editor_font(root):
     return (default_editor_family(root), size)
 
 
-# ナビゲーションと「仮名化する語」の一覧のスタイル（書体・字の大きさ・行の高さをオプションで変える。apply_nav_prefs）
+# ナビゲーションと仮名リスト（「仮名化する語」の一覧）のスタイル（書体・字の大きさ・行の高さをオプションで変える。
+# apply_nav_prefs）。選んだ行の地は、エディターの現在行と同じ薄い灰色（2026-11-27 班長指示）
 LIST_STYLE = "Nav.Treeview"
 
 
@@ -100,6 +106,33 @@ def apply_nav_prefs(root, family, size, spacing):
     line = tkfont.Font(root=root, family=family, size=size).metrics("linespace")
     style = ttk.Style(root)
     style.configure(LIST_STYLE, font=(family, size), rowheight=line + round(spacing * root.winfo_fpixels("1p")))
+
+
+HEADING_ELEMENT = "Underline.heading"       # 一覧の見出し行の地（白、下に細い線）
+HEADING_TILE = (512, 64)    # 見出し行の地の画像の大きさ（画素。見出し1つの大きさより大きくし、敷き詰める回数を減らす）
+_heading_images = {}        # 見出し行の地の画像（Tk の処理系ごと。部品の名前も処理系ごと。画像は参照を持ち続けないと消える）
+
+
+def _create_heading_element(root, style):
+    """一覧（Treeview）の見出し行を、白い地と下の細い線（BORDER の色）で描く部品にする。"""
+    image = _heading_images.get(root.tk)
+    if image is None:
+        from tkinter import PhotoImage
+        # 画像は大きめにする。ttk は画像を伸ばさず、見出しの大きさまで敷き詰めて描くので、1画素の画像だと、描くたびに
+        # 画素の数だけ描くことになり、一覧の行を選ぶたびに 0.5 秒ほど待たされた（2026-11-27 班長指摘）
+        w, h = HEADING_TILE
+        image = PhotoImage(master=root, width=w, height=h)
+        image.put(FIELD_BG, to=(0, 0, w, h - 1))
+        image.put(BORDER, to=(0, h - 1, w, h))
+        _heading_images[root.tk] = image
+        # 下の1画素（線）は上下に伸ばさず、上（地）を見出しの大きさに合わせる。見出しの大きさは字で決め、画像の大きさに
+        # 引きずられないよう、求める大きさは小さくしておく
+        style.element_create(HEADING_ELEMENT, "image", image, border=(0, 0, 0, 1), sticky="nsew", width=1, height=2)
+    style.layout("Treeview.Heading", [
+        (HEADING_ELEMENT, {"sticky": "nswe", "children": [
+            ("Treeheading.padding", {"sticky": "nswe", "children": [
+                ("Treeheading.image", {"side": "right", "sticky": ""}),
+                ("Treeheading.text", {"sticky": "we"})]})]})])
 
 
 def apply_theme(root):
@@ -179,9 +212,12 @@ def apply_theme(root):
     style.configure("Treeview", background=FIELD_BG, fieldbackground=FIELD_BG, foreground=TEXT,
                     bordercolor=BORDER, lightcolor=FIELD_BG, darkcolor=FIELD_BG, rowheight=20)
     style.map("Treeview", background=[("selected", PRESSED_BG)], foreground=[("selected", TEXT)])
-    style.configure("Treeview.Heading", background=WINDOW_BG, foreground=TEXT, bordercolor=BORDER,
-                    lightcolor=WINDOW_BG, darkcolor=WINDOW_BG, relief="flat")
-    style.map("Treeview.Heading", background=[("active", HOVER_BG)])
+    style.map(LIST_STYLE, background=[("selected", CURRENT_LINE_BG)], foreground=[("selected", TEXT)])
+    # 一覧の見出し行は、地の色を付けず（一覧と同じ白）、下に細い線を1本引く（選んだ行の薄い灰色と見分けるため。
+    # 2026-11-27 班長指示。それまでは灰色の地で、列ごとに枠で区切り、マウスを重ねると淡い青になった）。ttk の見出しには
+    # 下の線だけを引く設定がないので、下の1画素だけが線の色の画像を、見出しの地として伸ばして使う
+    style.configure("Treeview.Heading", background=FIELD_BG, foreground=TEXT, relief="flat")
+    _create_heading_element(root, style)
     style.configure("TScrollbar", troughcolor=WINDOW_BG, background=SCROLL_THUMB, bordercolor=WINDOW_BG,
                     lightcolor=SCROLL_THUMB, darkcolor=SCROLL_THUMB, arrowcolor="#606060")
     style.map("TScrollbar",

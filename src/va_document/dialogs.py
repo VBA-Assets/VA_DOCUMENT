@@ -299,7 +299,7 @@ class LoadEntriesDialog(_Dialog):
         row.pack(fill="both", expand=True, pady=(10, 0))
         tree = ttk.Treeview(row, columns=("token", "word", "kind"), show="headings", height=min(max(len(plan.add), 3), 12),
                             selectmode="none")
-        for col, label, width in (("token", "記号", 120), ("word", "元の語", 300), ("kind", "種別", 80)):
+        for col, label, width in (("token", "仮名", 120), ("word", "元の語", 300), ("kind", "種別", 80)):
             tree.heading(col, text=label, anchor="w")
             tree.column(col, width=width, anchor="w", stretch=col == "word")
         for e in sorted(plan.add, key=lambda e: (KINDS.index(e.kind), e.token)):
@@ -331,7 +331,7 @@ class OptionsDialog(_Dialog):
     "nav_line_spacing", "prompt"}（prompt は直した AI への指示。直していなければ None。やめたら result が None）。"""
 
     DEFAULT_FONT = "（既定）"
-    LIST_BOX_TITLE = "ナビゲーション・仮名化する語"     # 2つの一覧に共通の書体の設定の枠
+    LIST_BOX_TITLE = "ナビゲーション・仮名リスト"     # 2つの一覧に共通の書体の設定の枠
 
     def __init__(self, parent, cfg, font_choices, size_range, spacing_range, prompt, default_prompt, nav_spacing_range):
         super().__init__(parent, "オプション")

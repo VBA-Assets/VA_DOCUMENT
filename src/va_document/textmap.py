@@ -94,6 +94,29 @@ class LayoutMap:
         top, height = ts.line_box(target)
         return target.page - 1, ts.margin_left + x, top, height
 
+    def paragraph_bands(self, orig_line, orig_col):
+        """エディターの位置のある段落を組んだ範囲 → [(ページ 0 から, 上端の y, 高さ), …]（ページごとに1つ。ポイント、用紙の
+        左上から）。プレビューの現在行の強調表示に使う（エディターの1行＝段落と同じ範囲を示す。2026-11-27 班長指示）。
+        字のある行に組んだ段落は、その全部の行（ページをまたげば、ページごと）。表はカーソルのある行（表の1行がエディターの
+        1行）、画像・空の行など字のない段落は、locate と同じ範囲。"""
+        found = self.locate(orig_line, orig_col)
+        if found is None:
+            return []
+        line = self._cleaned_line(orig_line)
+        pi = self.para_of_line.get(line)
+        p = self.paras[pi]
+        lines = self.lines_of_para.get(pi)
+        if p.kind == TABLE or (p.kind == IMAGE and pi in self.image_of_para) or not lines:
+            page, _, top, height = found
+            return [(page, top, height)]
+        bands = {}
+        for ln in lines:
+            top, height = self.ts.line_box(ln)
+            page = ln.page - 1
+            first, last = bands.get(page, (top, top + height))
+            bands[page] = (min(first, top), max(last, top + height))
+        return [(page, first, last - first) for page, (first, last) in sorted(bands.items())]
+
     def _locate_table(self, p, pi, line, col):
         r = line - p.src_line
         table_row = 0 if r <= 1 else r - 1          # 2行目は区切りの行

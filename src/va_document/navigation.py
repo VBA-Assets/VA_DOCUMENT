@@ -7,8 +7,9 @@
 ・エディターの見出しを、レベルに合わせて木の形で並べる（番号は組んだときと同じ。エディターと同じく、仮名化した語は記号の
   まま）。見出しの読み取りと、範囲の決め方は outline.py。
 ・見出しをクリックする（↑↓で選ぶ）と、エディターのカーソルをその見出しへ動かす。エディターでカーソルを動かすと、カーソルの
-  ある見出しを選ぶ（行の地が青くなる。畳んだ見出しの中なら、畳んだ見出しを選ぶ）。はじめはエディター・プレビューと同じ ▼ も
-  付けたが、行の地の色で分かるので外した（2026-11-24 班長指示）。
+  ある見出しを選ぶ（行の地が薄い灰色になる。畳んだ見出しの中なら、畳んだ見出しを選ぶ）。はじめはエディター・プレビューと
+  同じ ▼ も付けたが、行の地の色で分かるので外した（2026-11-24 班長指示）。地の色は、はじめは淡い青だったが、エディター・
+  プレビューの現在行と同じ薄い灰色にした（2026-11-27 班長指示。theme.CURRENT_LINE_BG）。
 ・見出しをドラッグ アンド ドロップすると、その見出しに属する見出し・本文と一緒に動かす（レベルは変えない）。
 ・右クリックのメニュー（レベルを上げる・レベルを下げる・前に／後に／小見出しを挿入・見出しと本文を選択・削除。挿入と選択は
   2026-11-24 班長決定）と、キー（Alt+Shift+←→ でレベル、Alt+Shift+↑↓ で同じ親の
@@ -62,7 +63,8 @@ class NavigationMixin:
                 pass
         body = ttk.Frame(pane)
         body.pack(fill="both", expand=True)
-        # 書体・字の大きさ・行の高さは、オプションで変えられる（Nav.Treeview。theme.apply_nav_prefs）
+        # 書体・字の大きさ・行の高さは、オプションで変えられる（Nav.Treeview。theme.apply_nav_prefs）。カーソルのある見出しの
+        # 地は、エディターの現在行と同じ薄い灰色（theme.CURRENT_LINE_BG）
         self.nav_tree = tree = ttk.Treeview(body, show="tree", selectmode="browse", style=theme.LIST_STYLE)
         ys = ttk.Scrollbar(body, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=ys.set)
@@ -172,7 +174,7 @@ class NavigationMixin:
         return out
 
     def _update_nav_current(self, force=False):
-        """エディターのカーソルのある見出しを選ぶ（エディターの ▼ を置き直すたびに呼ぶ。editor_mark.py）。畳んだ見出しの
+        """エディターのカーソルのある見出しを選ぶ（エディターの現在行の強調表示を置き直すたびに呼ぶ。current_line.py）。畳んだ見出しの
         中なら、畳んだ見出しを選ぶ。見出しの外（最初の見出しの前、「以上」など）なら、どれも選ばない。"""
         if "nav_tree" not in self.__dict__ or "text" not in self.__dict__ or not self.nav_shown():
             return
@@ -256,7 +258,7 @@ class NavigationMixin:
         self.text.tag_remove("sel", "1.0", "end")
         self.text.mark_set("insert", index)
         self._scroll_to_third(index)
-        self._schedule_editor_mark()
+        self._schedule_current_line()
         self._show_caret()
 
     def _nav_index(self, item):
@@ -452,7 +454,7 @@ class NavigationMixin:
         self.text.tag_add("sel", first, last)
         self.text.mark_set("insert", last)
         self._scroll_to_third(first)
-        self._schedule_editor_mark()
+        self._schedule_current_line()
         self._show_caret()
         self.text.focus_set()
         return "break"
@@ -497,7 +499,7 @@ class NavigationMixin:
         self._scroll_to_third("insert")
         self._update_title()
         self.refresh()
-        self._schedule_editor_mark()
+        self._schedule_current_line()
         self.nav_tree.focus_set()
 
     def _nav_undo(self, command):

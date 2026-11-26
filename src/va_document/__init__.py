@@ -5,5 +5,5 @@
 
 # 版の2桁目は、9 の次を A とする（Ver291 の次は Ver2A0。2026-11-13 班長決定）。画面と配布物の名前は「Ver」と、
 # 点を除いたもの（app.VERSION_LABEL・scripts\build_release.py・統合版の iss の DocuVer も同じ形）
-__version__ = "4.2.0"
+__version__ = "4.2.1"
 APP_NAME = "VA Document"

@@ -136,3 +136,28 @@ def test_distribute_marks_round_trip():
     m = session_for(text)
     for ch in "原告甲郎":
         assert round_trip(m, 0, text.index(ch)) == (0, text.index(ch)), ch
+
+
+def test_paragraph_bands():
+    """プレビューの現在行の強調表示は、エディターの1行＝段落を組んだ行の全部（ページをまたげば、ページごと。2026-11-27
+    班長指示）。段落のどの字にカーソルがあっても同じ範囲。"""
+    long_para = "被告は、原告の主張をすべて争う。" * 12
+    for filler in range(20, 40):
+        text = "\n".join(["本文の行。"] * filler + [long_para, "最後の行。"]) + "\n"
+        m = session_for(text)
+        bands = m.paragraph_bands(filler, 0)
+        if len(bands) == 2:
+            break
+    else:
+        pytest.fail("段落がページをまたぐ見本を作れなかった")
+    lines = [ln for ln in m.lines if m.paras[ln.para_index].src_line == m._cleaned_line(filler) and ln.glyphs]
+    assert len(lines) >= 3
+    (p0, top0, h0), (p1, top1, h1) = bands
+    assert p1 == p0 + 1
+    first, last = [ln for ln in lines if ln.page - 1 == p0], [ln for ln in lines if ln.page - 1 == p1]
+    assert (top0, top0 + h0) == (m.ts.line_box(first[0])[0], sum(m.ts.line_box(first[-1])))
+    assert (top1, top1 + h1) == (m.ts.line_box(last[0])[0], sum(m.ts.line_box(last[-1])))
+    assert m.paragraph_bands(filler, len(long_para) - 1) == bands
+    # 1行の段落は、locate の行と同じ
+    page, x, top, h = m.locate(0, 0)
+    assert m.paragraph_bands(0, 0) == [(page, top, pytest.approx(h))]

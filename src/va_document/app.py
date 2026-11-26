@@ -1,6 +1,6 @@
 """VA Documentの画面（tkinter・ttk。仕様.md の4）。
 
-・画面のまとめ役。部品（mixin）を混ぜて使う：エディターの操作（editor_ops.py。カーソルの上の ▼ は editor_mark.py、表の挿入と
+・画面のまとめ役。部品（mixin）を混ぜて使う：エディターの操作（editor_ops.py。現在行の強調表示は current_line.py、表の挿入と
   表のセルは table_ops.py）、確認表示（preview.py）、
   ファイルの操作（file_ops.py：開く・保存・閉じる・印刷）、AI 連携（ai_ops.py：仮名化・コピー・取り込み）、
   ナビゲーション（navigation.py：見出しの一覧。見出しの範囲の操作は outline.py）、欄の並びと幅（panes.py：ナビゲーション・
@@ -455,17 +455,18 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, NavigationMixin,
         # 変える・解除する。画面を簡潔にし、仮名化の解除を手軽にしすぎないため。2026-10-27 班長指示）
         title_row = ttk.Frame(bottom)
         title_row.pack(anchor="w")
-        ttk.Label(title_row, text="仮名化する語").pack(side="left")
+        # 題は「仮名リスト」、列の見出しは「仮名」（2026-11-27 班長指示。それまでは「仮名化する語」「記号」）
+        ttk.Label(title_row, text="仮名リスト").pack(side="left")
         ttk.Label(title_row, text="（ダブルクリックで編集）", style="Note.TLabel").pack(side="left")
         # 同じ案件のほかの文書（書式付きファイル・構文ファイル）から、仮名化した語を今の一覧に足す（2026-10-29 班長決定）
         ttk.Button(title_row, text="ファイルから読み込む", style="Small.TButton", command=self.on_load_entries
                    ).pack(side="left", padx=(8, 0))
         tree_row = ttk.Frame(bottom)
         tree_row.pack(fill="x")
-        # 字は、ナビゲーションと同じ書体・大きさ・行の間隔（オプションの「ナビゲーション・仮名化する語」。2026-11-24 班長指示）
+        # 字は、ナビゲーションと同じ書体・大きさ・行の間隔（オプションの「ナビゲーション・仮名リスト」。2026-11-24 班長指示）
         self.tree = ttk.Treeview(tree_row, columns=("token", "word", "kind"), show="headings", height=4,
                                  selectmode="browse", style=theme.LIST_STYLE)
-        for col, label, width in (("token", "記号", 120), ("word", "元の語", 300), ("kind", "種別", 80)):
+        for col, label, width in (("token", "仮名", 120), ("word", "元の語", 300), ("kind", "種別", 80)):
             self.tree.heading(col, text=label, anchor="w")
             self.tree.column(col, width=width, anchor="w", stretch=col == "word")
         tys = ttk.Scrollbar(tree_row, orient="vertical", command=self.tree.yview)
@@ -484,9 +485,9 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, NavigationMixin,
         editor.pack(fill="both", expand=True)
         self.text = tk.Text(editor, wrap="char", undo=True, font=theme.editor_font(self), padx=6, pady=6,
                             **theme.editor_spacing(self))
-        self._init_editor_mark()        # カーソルの上の ▼（2026-10-26 班長決定）
+        self._init_current_line()       # 現在行の強調表示（2026-11-27 班長指示）
         ys = ttk.Scrollbar(editor, orient="vertical", command=self.text.yview)
-        self.text.configure(yscrollcommand=lambda first, last: (ys.set(first, last), self._schedule_editor_mark()))
+        self.text.configure(yscrollcommand=lambda first, last: (ys.set(first, last), self._schedule_current_line()))
         ys.pack(side="right", fill="y")
         self.text.pack(side="left", fill="both", expand=True)
         self.text.tag_configure("registered", background=theme.REGISTERED_BG)
@@ -500,7 +501,7 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, NavigationMixin,
         # 蛍光ペン（==文字==）の字は黄色の地で示す。仮名化した語・検索で見つけた字の地の色を優先する（下に置く）
         self.text.tag_configure("highlight", background=theme.HIGHLIGHT_BG)
         self.text.tag_lower("highlight")
-        self.text.bind("<<Modified>>", self.on_text_modified, add="+")     # ▼ の置き直し（_init_editor_mark）を消さない
+        self.text.bind("<<Modified>>", self.on_text_modified, add="+")     # 現在行の置き直し（_init_current_line）を消さない
         # IME の入力中の文字を、エディターと同じ書体・大きさで表示する（2026-10-23 班長指摘）
         self.text.bind("<FocusIn>", lambda e: self.after_idle(self._fit_ime), add="+")
         # 貼り付け（Ctrl+V）は、仮名化した語を記号に置き換えて貼る（エディターは常に仮名。2026-10-24）
@@ -512,14 +513,17 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, NavigationMixin,
         self._init_editor_menu()
         # エディターでカーソルを動かすと、その字のあるページを確認表示に出す（2026-10-23 班長指示）
         self._caret_job = None
-        for seq in ("<KeyRelease>", "<ButtonRelease-1>"):
-            self.text.bind(seq, lambda e: self._schedule_caret(), add="+")
+        # マウスで押したときは待たずに出す。キーで動かすときは、押し続けている間に何度も描かないよう、少し待つ（2026-11-27
+        # 班長指摘「プレビューの反応がやや遅い」。それまでは、どちらも 0.12 秒待っていた）
+        self.text.bind("<KeyRelease>", lambda e: self._schedule_caret(), add="+")
+        self.text.bind("<ButtonRelease-1>", lambda e: self._schedule_caret(0), add="+")
         self.text.tag_configure("found", background=theme.FOUND_BG)
         self.text.tag_configure("found_current", background=theme.CURRENT_FOUND_BG, foreground=theme.CURRENT_FOUND_FG)
         # AI の回答で変わった段落の印（右端の青い線。Word の変更線と同じ考え方。左端では行頭のマークダウンの記号の
         # じゃまになるため、右端にする。2026-10-24 班長指示）
         self.text.tag_configure("changed", rmargin=theme.CHANGE_BAR_WIDTH, rmargincolor=theme.ACCENT)
         self.text.tag_lower("found", "sel")
+        self._lower_current_line()      # 現在行の地の色は、ほかの印（蛍光ペンなど）の下に置く（current_line.py）
 
     # ======================================================================
     # ヘルプ・診断情報（2026-11-10 班長決定：Python のツールに、次の版上げのときに入れる。VA mints・VA Case と同じ形）
@@ -817,13 +821,15 @@ class MainWindow(EditorMixin, PreviewMixin, FileMixin, AiMixin, NavigationMixin,
         # 保存していない文書は、エディターが空なら「開かれていません」（起動したとき・閉じた後）、書いていれば
         # 「保存していません」（2026-10-24 班長指摘）
         none = "（開かれていません）" if not self.raw_text().strip() else "（保存していません）"
-        self._pdf_name_text = (f"書式付き（PDF）ファイル：{s.pdf_path.name}" if s.pdf_path and s.version
-                               else f"書式付き（PDF）ファイル：{none}")
+        # 題は「プレビュー」「エディター」（左の「ナビゲーション」にそろえる。2026-11-27 班長指示。それまでは
+        # 「書式付き（PDF）ファイル」「構文（VAMD）ファイル」）
+        self._pdf_name_text = (f"プレビュー：{s.pdf_path.name}" if s.pdf_path and s.version
+                               else f"プレビュー：{none}")
         self._fit_pdf_name()
         # 版は画面に出さない（PDF と構文ファイルの組を確かめる内部の仕組み。古い回答の知らせなどで、必要なときだけ出す。
         # 2026-10-24 班長指示）
-        self.doc_id_label.configure(text=f"構文（VAMD）ファイル：{s.vamd_path.name}"
-                                    if s.version else f"構文（VAMD）ファイル：{none}")
+        self.doc_id_label.configure(text=f"エディター：{s.vamd_path.name}"
+                                    if s.version else f"エディター：{none}")
         self.copy_path_button.configure(state="normal" if s.version else "disabled")
 
     def is_blank(self):
